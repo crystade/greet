@@ -13,8 +13,28 @@
 
 ## Installation
 
+### Library
+
 ```bash
-go install greet/cmd/greet@latest
+go get github.com/crystade/greet@latest
+```
+
+Then import and use in your Go code:
+
+```go
+import "github.com/crystade/greet"
+
+func main() {
+    ctx := context.Background()
+    result, err := greet.Greet(ctx, "ssh", "github.com:22")
+    // ...
+}
+```
+
+### CLI
+
+```bash
+go install github.com/crystade/greet/cmd/greet@latest
 ```
 
 Or build from source:
@@ -22,6 +42,36 @@ Or build from source:
 ```bash
 go build -o greet ./cmd/greet/
 ```
+
+## Library Usage
+
+The [`greet.Greet()`](greet.go:14) function is the primary entry point:
+
+```go
+result, err := greet.Greet(ctx, "ssh", "github.com:22")
+if err != nil {
+    // handle *greet.GreetError
+}
+fmt.Println(result.Success, result.Latency, result.Data)
+```
+
+Customize behavior with functional options:
+
+```go
+result, err := greet.Greet(ctx, "minecraft", "hypixel.net:25565",
+    greet.WithTimeout(10*time.Second),
+    greet.WithProtocolConfig(&minecraft.Config{ProtocolVersion: 775}),
+)
+```
+
+For pre-resolved protocols, use [`greet.GreetWith()`](greet.go:29):
+
+```go
+p, _ := greet.Get("ssh")
+result, err := greet.GreetWith(ctx, p, "github.com", 22)
+```
+
+See [`greet.go`](greet.go) and [`options.go`](options.go) for the complete API.
 
 ## CLI Usage
 
