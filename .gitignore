@@ -1,0 +1,15 @@
+*.iml
+**/*.iml
+
+.env
+**/.env
+
+.DS_Store
+
+.idea/
+.vscode/
+.kilo/
+.roo/
+.cline/
+dist/
+secrets/
