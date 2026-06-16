@@ -4,7 +4,7 @@ import "fmt"
 
 // ErrorCode is a human-readable error category string.
 // Code always compares against named constants; the string value is
-// immediately readable in logs, JSON output, and debug prints.
+// immediately readable in logs and debug prints.
 type ErrorCode string
 
 // String returns the human-readable error code.
@@ -35,7 +35,6 @@ func (e *GreetError) Unwrap() error { return e.Cause }
 const (
 	ErrResolveHostFailed ErrorCode = "resolve_host_failed"
 	ErrInvalidAddress    ErrorCode = "invalid_address"
-	ErrProtocolMismatch  ErrorCode = "protocol_mismatch"
 	ErrUnknownProtocol   ErrorCode = "unknown_protocol"
 	ErrInvalidConfig     ErrorCode = "invalid_config"
 )

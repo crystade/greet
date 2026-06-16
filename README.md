@@ -173,7 +173,6 @@ graph TD
 |---|---|
 | `resolve_host_failed` | Failed to resolve hostname to IP address |
 | `invalid_address` | Invalid host or port format |
-| `protocol_mismatch` | Server responded with data that does not match the expected protocol format; the target may be running a different service |
 | `unknown_protocol` | Requested protocol name is not registered |
 | `invalid_config` | Protocol-specific configuration is malformed or of the wrong type |
 
