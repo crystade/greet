@@ -22,7 +22,7 @@ const DefaultSSHPort = 22
 
 // SSHResult holds the outcome of an SSH banner exchange.
 type SSHResult struct {
-	VersionString string `json:"version_string"` // e.g. "SSH-2.0-OpenSSH_8.9"
+	VersionString string // e.g. "SSH-2.0-OpenSSH_8.9"
 }
 
 // SSH implements an SSH version banner probe.

@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -140,31 +138,4 @@ func printProtocols() {
 		}
 		fmt.Fprintf(os.Stderr, "  %-14s %-6s %s\n", p.Name(), port, p.Description())
 	}
-}
-
-func printResult(result *greet.GreetResult) {
-	jsonBytes, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling result: %v\n", err)
-		return
-	}
-	fmt.Println(string(jsonBytes))
-}
-
-func printError(err error) {
-	output := map[string]interface{}{
-		"success": false,
-		"error":   err.Error(),
-	}
-
-	var ge *greet.GreetError
-	if errors.As(err, &ge) {
-		output["code"] = string(ge.Code)
-		if ge.Protocol != "" {
-			output["protocol"] = ge.Protocol
-		}
-	}
-
-	jsonBytes, _ := json.MarshalIndent(output, "", "  ")
-	fmt.Fprintln(os.Stderr, string(jsonBytes))
 }

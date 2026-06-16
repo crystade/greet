@@ -50,10 +50,10 @@ type MinecraftConfig struct {
 
 // MinecraftResult holds the outcome of a Minecraft status query.
 type MinecraftResult struct {
-	Version    string `json:"version"`
-	MOTD       string `json:"motd"`
-	Players    int    `json:"players_online"`
-	MaxPlayers int    `json:"players_max"`
+	Version    string
+	MOTD       string
+	Players    int
+	MaxPlayers int
 }
 
 // statusResponseJSON is the JSON structure returned by Minecraft servers.

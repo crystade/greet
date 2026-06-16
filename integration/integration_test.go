@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -61,19 +60,33 @@ func cliOutput(args ...string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-// cliJSON runs the greet CLI, asserts exit code 0, and parses JSON output.
-func cliJSON(t *testing.T, args ...string) map[string]interface{} {
+// parseKeyValues parses "Key: Value" lines into a map.
+func parseKeyValues(output string) map[string]string {
+	result := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		idx := strings.Index(line, ": ")
+		if idx < 0 {
+			continue
+		}
+		key := line[:idx]
+		val := line[idx+2:]
+		result[key] = val
+	}
+	return result
+}
+
+// cliKV runs the greet CLI, asserts exit code 0, and parses key-value output.
+func cliKV(t *testing.T, args ...string) map[string]string {
 	t.Helper()
 	stdout, stderr, code := cliOutput(args...)
 	if code != 0 {
 		t.Fatalf("greet %v exited with code %d\nstdout: %s\nstderr: %s", args, code, stdout, stderr)
 	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-		t.Fatalf("failed to parse JSON output: %v\nraw stdout: %s", err, stdout)
-	}
-	return result
+	return parseKeyValues(stdout)
 }
 
 // waitForPort retries a TCP connection until it succeeds or times out.
@@ -96,16 +109,16 @@ func TestIntegrationTCP(t *testing.T) {
 		t.Skipf("PostgreSQL container not ready (used as TCP target): %v", err)
 	}
 
-	result := cliJSON(t, "tcp", "localhost:15432")
+	result := cliKV(t, "tcp", "localhost:15432")
 
-	if result["success"] != true {
-		t.Errorf("expected success=true, got %v", result["success"])
+	if result["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result["Success"])
 	}
-	if result["protocol"] != "tcp" {
-		t.Errorf("expected protocol=tcp, got %v", result["protocol"])
+	if result["Protocol"] != "tcp" {
+		t.Errorf("expected Protocol=tcp, got %v", result["Protocol"])
 	}
-	if result["transport"] != "tcp" {
-		t.Errorf("expected transport=tcp, got %v", result["transport"])
+	if result["Transport"] != "tcp" {
+		t.Errorf("expected Transport=tcp, got %v", result["Transport"])
 	}
 }
 
@@ -119,12 +132,9 @@ func TestIntegrationUDP(t *testing.T) {
 
 	// UDP may succeed or fail depending on network; just verify it doesn't panic
 	if code == 0 {
-		var result map[string]interface{}
-		if err := json.Unmarshal([]byte(stdout), &result); err != nil {
-			t.Fatalf("failed to parse JSON: %v", err)
-		}
-		if result["protocol"] != "udp" {
-			t.Errorf("expected protocol=udp, got %v", result["protocol"])
+		result := parseKeyValues(stdout)
+		if result["Protocol"] != "udp" {
+			t.Errorf("expected Protocol=udp, got %v", result["Protocol"])
 		}
 	}
 }
@@ -136,25 +146,17 @@ func TestIntegrationSSH(t *testing.T) {
 		t.Skipf("SSH container not ready: %v", err)
 	}
 
-	result := cliJSON(t, "ssh", "localhost:2222")
+	result := cliKV(t, "ssh", "localhost:2222")
 
-	if result["success"] != true {
-		t.Errorf("expected success=true, got %v", result["success"])
+	if result["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result["Success"])
 	}
-	if result["protocol"] != "ssh" {
-		t.Errorf("expected protocol=ssh, got %v", result["protocol"])
+	if result["Protocol"] != "ssh" {
+		t.Errorf("expected Protocol=ssh, got %v", result["Protocol"])
 	}
-
-	data, ok := result["data"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected data to be a map, got %T", result["data"])
-	}
-	versionStr, ok := data["version_string"].(string)
-	if !ok {
-		t.Fatalf("expected data.version_string to be a string, got %T", data["version_string"])
-	}
+	versionStr := result["Version String"]
 	if !strings.HasPrefix(versionStr, "SSH-") {
-		t.Errorf("expected version_string to start with SSH-, got %q", versionStr)
+		t.Errorf("expected Version String to start with SSH-, got %q", versionStr)
 	}
 }
 
@@ -165,22 +167,17 @@ func TestIntegrationPostgreSQL(t *testing.T) {
 		t.Skipf("PostgreSQL container not ready: %v", err)
 	}
 
-	result := cliJSON(t, "postgresql", "localhost:15432")
+	result := cliKV(t, "postgresql", "localhost:15432")
 
-	if result["success"] != true {
-		t.Errorf("expected success=true, got %v", result["success"])
+	if result["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result["Success"])
 	}
-	if result["protocol"] != "postgresql" {
-		t.Errorf("expected protocol=postgresql, got %v", result["protocol"])
-	}
-
-	data, ok := result["data"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected data to be a map, got %T", result["data"])
+	if result["Protocol"] != "postgresql" {
+		t.Errorf("expected Protocol=postgresql, got %v", result["Protocol"])
 	}
 	// PostgreSQL alpine image does not enable SSL by default
-	if data["ssl_supported"] != false {
-		t.Errorf("expected ssl_supported=false, got %v", data["ssl_supported"])
+	if result["SSL Supported"] != "false" {
+		t.Errorf("expected SSL Supported=false, got %v", result["SSL Supported"])
 	}
 }
 
@@ -189,21 +186,16 @@ func TestIntegrationPostgreSQLDisableSSL(t *testing.T) {
 		t.Skipf("PostgreSQL container not ready: %v", err)
 	}
 
-	result := cliJSON(t, "postgresql", "localhost:15432", "--sslmode=disable")
+	result := cliKV(t, "postgresql", "localhost:15432", "--sslmode=disable")
 
-	if result["success"] != true {
-		t.Errorf("expected success=true, got %v", result["success"])
+	if result["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result["Success"])
 	}
-	if result["protocol"] != "postgresql" {
-		t.Errorf("expected protocol=postgresql, got %v", result["protocol"])
+	if result["Protocol"] != "postgresql" {
+		t.Errorf("expected Protocol=postgresql, got %v", result["Protocol"])
 	}
-
-	data, ok := result["data"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected data to be a map, got %T", result["data"])
-	}
-	if data["ssl_supported"] != false {
-		t.Errorf("expected ssl_supported=false with --sslmode=disable, got %v", data["ssl_supported"])
+	if result["SSL Supported"] != "false" {
+		t.Errorf("expected SSL Supported=false with --sslmode=disable, got %v", result["SSL Supported"])
 	}
 }
 
@@ -214,30 +206,25 @@ func TestIntegrationMinecraft(t *testing.T) {
 		t.Skipf("Minecraft container not ready: %v", err)
 	}
 
-	result := cliJSON(t, "minecraft", "localhost:25565")
+	result := cliKV(t, "minecraft", "localhost:25565")
 
-	if result["success"] != true {
-		t.Errorf("expected success=true, got %v", result["success"])
+	if result["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result["Success"])
 	}
-	if result["protocol"] != "minecraft" {
-		t.Errorf("expected protocol=minecraft, got %v", result["protocol"])
+	if result["Protocol"] != "minecraft" {
+		t.Errorf("expected Protocol=minecraft, got %v", result["Protocol"])
 	}
-	if result["transport"] != "tcp" {
-		t.Errorf("expected transport=tcp, got %v", result["transport"])
+	if result["Transport"] != "tcp" {
+		t.Errorf("expected Transport=tcp, got %v", result["Transport"])
 	}
-
-	data, ok := result["data"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected data to be a map, got %T", result["data"])
+	if _, ok := result["Version"]; !ok {
+		t.Errorf("expected Version to be present")
 	}
-	if _, ok := data["version"].(string); !ok {
-		t.Errorf("expected data.version to be a string, got %T", data["version"])
+	if _, ok := result["MOTD"]; !ok {
+		t.Errorf("expected MOTD to be present")
 	}
-	if _, ok := data["motd"]; !ok {
-		t.Errorf("expected data.motd to be present")
-	}
-	if _, ok := data["players_max"].(float64); !ok {
-		t.Errorf("expected data.players_max to be a number, got %T", data["players_max"])
+	if _, ok := result["Players Max"]; !ok {
+		t.Errorf("expected Players Max to be present")
 	}
 }
 

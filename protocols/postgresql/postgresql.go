@@ -35,7 +35,7 @@ type PostgreSQLConfig struct {
 
 // PostgreSQLResult holds the outcome of a PostgreSQL SSL probe.
 type PostgreSQLResult struct {
-	SSLSupported bool `json:"ssl_supported"`
+	SSLSupported bool
 }
 
 // PostgreSQL implements a PostgreSQL SSLRequest probe.
