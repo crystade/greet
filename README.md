@@ -286,64 +286,6 @@ Each certificate in the `cert_chain` array also carries its own per-certificate 
 | `CERT_WEAK_KEY` | RSA key < 2048 bits, or ECDSA key < 256 bits |
 | `CERT_VALIDITY_TOO_LONG` | Leaf cert issued on or after 2020-09-01 with validity > 398 days (Apple/Chrome/Firefox CA/B Forum policy) |
 
-#### Example output
-
-```json
-{
-  "protocol": "tls",
-  "transport": "tcp",
-  "latency": "38.5ms",
-  "latency_ms": 38.5,
-  "success": true,
-  "data": {
-    "cert_chain": [
-      {
-        "subject": "CN=badssl.com,O=Lucas Garron Torres,L=Walnut Creek,ST=California,C=US",
-        "issuer": "CN=DigiCert SHA2 Secure Server CA,O=DigiCert Inc,C=US",
-        "serial": "17250586864132586117090168688808971894",
-        "not_before": "2023-03-14T00:00:00Z",
-        "not_after": "2024-03-13T23:59:59Z",
-        "version": 3,
-        "dns_names": ["badssl.com", "*.badssl.com"],
-        "is_ca": false,
-        "signature_algo": "SHA256-RSA",
-        "public_key_algo": "RSA",
-        "sha256_fingerprint": "a5f3f5c2...",
-        "status": ["OK"]
-      },
-      {
-        "subject": "CN=DigiCert SHA2 Secure Server CA,O=DigiCert Inc,C=US",
-        "issuer": "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
-        "serial": "20686105761910084228472243158365782289",
-        "not_before": "2013-03-08T12:00:00Z",
-        "not_after": "2023-03-08T12:00:00Z",
-        "version": 3,
-        "is_ca": true,
-        "signature_algo": "SHA256-RSA",
-        "public_key_algo": "RSA",
-        "sha256_fingerprint": "...",
-        "status": ["CERT_DATE_INVALID(expired)", "CERT_NO_REVOCATION_MECHANISM"]
-      },
-      {
-        "subject": "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
-        "issuer": "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
-        "serial": "083be056904246b1a1756ac95991c74a",
-        "not_before": "2006-11-10T00:00:00Z",
-        "not_after": "2031-11-10T00:00:00Z",
-        "version": 3,
-        "is_ca": true,
-        "signature_algo": "SHA256-RSA",
-        "public_key_algo": "RSA",
-        "sha256_fingerprint": "...",
-        "status": ["OK"]
-      }
-    ],
-    "status": ["CERT_DATE_INVALID(expired)", "CERT_NO_REVOCATION_MECHANISM"]
-  }
-}
-```
-
-
 ## Contribution
 Due to overhead of maintenance, we only accept popular protocols for now.
 
