@@ -9,5 +9,6 @@ import (
 	_ "github.com/crystade/greet/protocols/postgresql"
 	_ "github.com/crystade/greet/protocols/ssh"
 	_ "github.com/crystade/greet/protocols/tcp"
+	_ "github.com/crystade/greet/protocols/tls"
 	_ "github.com/crystade/greet/protocols/udp"
 )

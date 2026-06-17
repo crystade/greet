@@ -109,6 +109,9 @@ greet minecraft localhost:25565 --protocol-version=775
 
 # Use default port (from protocol's well-known port)
 greet ssh github.com        # equivalent to github.com:22
+
+# TLS — check leaf certificate
+greet tls expired.badssl.com:443
 ```
 
 ### Output
@@ -159,12 +162,14 @@ graph TD
     SSH[SSH Errors]
     PG[PostgreSQL Errors]
     MC[Minecraft Errors]
+    TLS[TLS Errors]
 
     COMMON --> TCP
     COMMON --> UDP
     TCP --> SSH
     TCP --> PG
     TCP --> MC
+    TCP --> TLS
 ```
 
 #### Common Errors
@@ -244,6 +249,100 @@ Inherits: Common + Generic TCP errors
 | `handshake_timeout` | Timed out waiting for status response |
 | `handshake_failed` | Failed to send handshake or status request |
 | `malformed_response` | Received malformed status response |
+
+### TLS (TCP)
+
+- **Input**: Host, Port (default `443`)
+- **Output**: Success with leaf certificate details, presented certificate chain, and latency, or an error code
+
+Inherits: Common + Generic TCP errors
+
+| Error Code | Description |
+|---|---|
+| `tls_handshake_failed` | TLS handshake with server failed |
+
+> **Limitation**: This is a lightweight certificate metadata probe, not a full browser/WebPKI validator. It does **not** perform trust-chain verification, revocation queries (OCSP/CRL fetching), SCT/CT policy checks, EKU validation, or name-constraint enforcement. The checks are heuristic and inspired by Chrome's `CERT_*` flags, but are not equivalent to Chrome's security UI.
+
+#### Certificate Status (`status` field)
+
+The `status` field is the **chain-level status**: it holds the `CERT_*` flags from the first certificate (walking leaf → root) that has a non-OK check, or `["OK"]` if every certificate in the chain passes all checks. Multiple flags can appear simultaneously.
+
+Each certificate in the `cert_chain` array also carries its own per-certificate `status`. The checks that apply depend on the certificate's role:
+
+- **Leaf-only checks**: `CERT_COMMON_NAME_INVALID`, `CERT_AUTHORITY_INVALID(self-signed)`, `CERT_SELF_SIGNED_LOCAL_NETWORK`, `CERT_VALIDITY_TOO_LONG`
+- **All certs**: `CERT_DATE_INVALID`, `CERT_WEAK_SIGNATURE_ALGORITHM`, `CERT_WEAK_KEY`
+- **Non-self-signed certs**: `CERT_NO_REVOCATION_MECHANISM` (root CAs are self-signed and excluded)
+
+| Status | Condition |
+|---|---|
+| `OK` | No issues detected |
+| `CERT_DATE_INVALID(not-yet-valid)` | Current time is before `NotBefore` |
+| `CERT_DATE_INVALID(expired)` | Current time is after `NotAfter` |
+| `CERT_COMMON_NAME_INVALID` | Certificate does not match the requested hostname (checks SANs, falls back to CN) |
+| `CERT_AUTHORITY_INVALID(self-signed)` | Issuer equals Subject (cryptographically verified) and cert has no local network names |
+| `CERT_SELF_SIGNED_LOCAL_NETWORK` | Self-signed cert whose SANs include a `.local` DNS name, loopback IP, private IP, or link-local address — mutually exclusive with `CERT_AUTHORITY_INVALID(self-signed)` |
+| `CERT_NO_REVOCATION_MECHANISM` | Non-self-signed cert has no OCSP responder and no CRL distribution points |
+| `CERT_WEAK_SIGNATURE_ALGORITHM` | Signed with MD2/RSA, MD5/RSA, SHA1/RSA, DSA/SHA1, or ECDSA/SHA1 |
+| `CERT_WEAK_KEY` | RSA key < 2048 bits, or ECDSA key < 256 bits |
+| `CERT_VALIDITY_TOO_LONG` | Leaf cert issued on or after 2020-09-01 with validity > 398 days (Apple/Chrome/Firefox CA/B Forum policy) |
+
+#### Example output
+
+```json
+{
+  "protocol": "tls",
+  "transport": "tcp",
+  "latency": "38.5ms",
+  "latency_ms": 38.5,
+  "success": true,
+  "data": {
+    "cert_chain": [
+      {
+        "subject": "CN=badssl.com,O=Lucas Garron Torres,L=Walnut Creek,ST=California,C=US",
+        "issuer": "CN=DigiCert SHA2 Secure Server CA,O=DigiCert Inc,C=US",
+        "serial": "17250586864132586117090168688808971894",
+        "not_before": "2023-03-14T00:00:00Z",
+        "not_after": "2024-03-13T23:59:59Z",
+        "version": 3,
+        "dns_names": ["badssl.com", "*.badssl.com"],
+        "is_ca": false,
+        "signature_algo": "SHA256-RSA",
+        "public_key_algo": "RSA",
+        "sha256_fingerprint": "a5f3f5c2...",
+        "status": ["OK"]
+      },
+      {
+        "subject": "CN=DigiCert SHA2 Secure Server CA,O=DigiCert Inc,C=US",
+        "issuer": "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
+        "serial": "20686105761910084228472243158365782289",
+        "not_before": "2013-03-08T12:00:00Z",
+        "not_after": "2023-03-08T12:00:00Z",
+        "version": 3,
+        "is_ca": true,
+        "signature_algo": "SHA256-RSA",
+        "public_key_algo": "RSA",
+        "sha256_fingerprint": "...",
+        "status": ["CERT_DATE_INVALID(expired)", "CERT_NO_REVOCATION_MECHANISM"]
+      },
+      {
+        "subject": "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
+        "issuer": "CN=DigiCert Global Root CA,OU=www.digicert.com,O=DigiCert Inc,C=US",
+        "serial": "083be056904246b1a1756ac95991c74a",
+        "not_before": "2006-11-10T00:00:00Z",
+        "not_after": "2031-11-10T00:00:00Z",
+        "version": 3,
+        "is_ca": true,
+        "signature_algo": "SHA256-RSA",
+        "public_key_algo": "RSA",
+        "sha256_fingerprint": "...",
+        "status": ["OK"]
+      }
+    ],
+    "status": ["CERT_DATE_INVALID(expired)", "CERT_NO_REVOCATION_MECHANISM"]
+  }
+}
+```
+
 
 ## Contribution
 Due to overhead of maintenance, we only accept popular protocols for now.
