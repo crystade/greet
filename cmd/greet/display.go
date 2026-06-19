@@ -23,7 +23,10 @@ func registerDataPrinter(name string, fn dataPrinter) {
 func printResult(result *greet.GreetResult) {
 	fmt.Printf("Protocol: %s\n", result.Protocol)
 	fmt.Printf("Transport: %s\n", result.Transport)
-	fmt.Printf("Latency: %s\n", result.Latency)
+	fmt.Printf("TTDR: %s\n", result.TTDR)
+	fmt.Printf("RTT: %s\n", result.RTT)
+	fmt.Printf("TTFB: %s\n", result.TTFB)
+	fmt.Printf("TTLB: %s\n", result.TTLB)
 	fmt.Printf("Success: %v\n", result.Success)
 
 	if printer, ok := dataPrinters[result.Protocol]; ok {

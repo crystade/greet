@@ -75,22 +75,32 @@ func (t *TLS) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	tlsDialer := &tls.Dialer{
-		Config: &tls.Config{
-			InsecureSkipVerify: true,
-			ServerName:         host,
-		},
-	}
-
 	start := time.Now()
-	conn, err := tlsDialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+
+	// Phase 1: DNS resolution
+	dns, err := greet.ResolveHost(ctx, host)
 	if err != nil {
-		// Distinguish TLS handshake failures from TCP connection failures.
-		// If it's a net.OpError with the address, it's a TCP error.
-		// Otherwise it's a TLS handshake failure.
-		if isTCPError(err) {
-			return nil, classifyTCPError(err, host, port)
-		}
+		return nil, err
+	}
+	ttdr := dns.TTDR
+
+	// Phase 2: TCP connection (measures RTT from start)
+	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
+	var d net.Dialer
+	tcpConn, err := d.DialContext(ctx, "tcp", addr)
+	rtt := time.Since(start)
+
+	if err != nil {
+		return nil, classifyTCPError(err, host, port)
+	}
+	defer tcpConn.Close()
+
+	// Phase 3: TLS handshake (measures TTFB/TTLB from start)
+	tlsConn := tls.Client(tcpConn, &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         host,
+	})
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return nil, &greet.GreetError{
 			Code:     ErrTLSHandshakeFailed,
 			Message:  fmt.Sprintf("TLS handshake with %s:%d failed: %v", host, port, err),
@@ -98,10 +108,9 @@ func (t *TLS) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 			Cause:    err,
 		}
 	}
-	defer conn.Close()
-	latency := time.Since(start)
+	ttfb := time.Since(start) // TTFB = TLS handshake complete (certificate chain available)
+	ttlb := ttfb              // TLS handshake is atomic — TTLB equals TTFB
 
-	tlsConn := conn.(*tls.Conn)
 	state := tlsConn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
 		return nil, &greet.GreetError{
@@ -154,7 +163,7 @@ func (t *TLS) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		Status:    chainStatus,
 	}
 
-	return greet.NewResult(ProtocolName, greet.TransportTCP, latency, true, result), nil
+	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, result), nil
 }
 
 // isTCPError returns true if the error comes from a TCP dial attempt

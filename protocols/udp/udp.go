@@ -22,7 +22,7 @@ const DefaultUDPPort = 53
 type UDP struct{}
 
 func (u *UDP) Name() string               { return ProtocolName }
-func (u *UDP) Description() string        { return "Generic UDP send/receive (latency only)" }
+func (u *UDP) Description() string        { return "Generic UDP send/receive" }
 func (u *UDP) DefaultPort() int           { return DefaultUDPPort }
 func (u *UDP) Transport() greet.Transport { return greet.TransportUDP }
 
@@ -32,8 +32,17 @@ func (u *UDP) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	start := time.Now()
 
+	// Phase 1: DNS resolution
+	dns, err := greet.ResolveHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ttdr := dns.TTDR
+
+	// Phase 2: UDP connection setup (no handshake, so no RTT here)
+	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
 	raddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, &greet.GreetError{
@@ -56,7 +65,7 @@ func (u *UDP) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		conn.SetDeadline(deadline)
 	}
 
-	start := time.Now()
+	// Phase 3: Send datagram and wait for response
 	_, err = conn.Write([]byte{})
 	if err != nil {
 		return nil, &greet.GreetError{
@@ -69,7 +78,7 @@ func (u *UDP) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 
 	buf := make([]byte, 1024)
 	_, _, err = conn.ReadFromUDP(buf)
-	latency := time.Since(start)
+	rtt := time.Since(start) // RTT = send→receive round trip
 
 	if err != nil {
 		var netErr net.Error
@@ -84,7 +93,8 @@ func (u *UDP) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		return nil, classifyUDPError(err, host, port)
 	}
 
-	return greet.NewResult(ProtocolName, greet.TransportUDP, latency, true, nil), nil
+	// Single datagram response — TTFB and TTLB equal RTT
+	return greet.NewResult(ProtocolName, greet.TransportUDP, ttdr, rtt, rtt, rtt, true, nil), nil
 }
 
 func init() {

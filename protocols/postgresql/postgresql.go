@@ -84,11 +84,21 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-
 	start := time.Now()
+
+	// Phase 1: DNS resolution
+	dns, err := greet.ResolveHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ttdr := dns.TTDR
+
+	// Phase 2: TCP connection (measures RTT from start)
+	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
+	rtt := time.Since(start)
+
 	if err != nil {
 		return nil, classifyTCPError(err, host, port)
 	}
@@ -101,11 +111,11 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 
 	if sslMode == "disable" {
 		// Skip SSL probe, just confirm TCP connection
-		latency := time.Since(start)
-		return greet.NewResult(ProtocolName, greet.TransportTCP, latency, true, &PostgreSQLResult{SSLSupported: false}), nil
+		ttfb := rtt // no app data — TTFB equals RTT
+		return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttfb, true, &PostgreSQLResult{SSLSupported: false}), nil
 	}
 
-	// Send SSLRequest message
+	// Phase 3: Send SSLRequest and read response (measures TTFB/TTLB from start)
 	sslReq := make([]byte, 8)
 	binary.BigEndian.PutUint32(sslReq[0:4], 8)               // length = 8
 	binary.BigEndian.PutUint32(sslReq[4:8], SSLRequestMagic) // code = 80877103
@@ -128,7 +138,8 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 	// Read single-byte response
 	resp := make([]byte, 1)
 	_, err = io.ReadFull(conn, resp)
-	latency := time.Since(start)
+	ttfb := time.Since(start) // TTFB = first (and only) byte of response
+	ttlb := ttfb              // single byte response — TTLB equals TTFB
 
 	if err != nil {
 		var netErr net.Error
@@ -151,7 +162,7 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 	switch resp[0] {
 	case 'S':
 		// Server supports SSL
-		return greet.NewResult(ProtocolName, greet.TransportTCP, latency, true, &PostgreSQLResult{SSLSupported: true}), nil
+		return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, &PostgreSQLResult{SSLSupported: true}), nil
 	case 'E':
 		return nil, &greet.GreetError{
 			Code:     ErrPostgreSQLSSLRejected,
@@ -160,7 +171,7 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 		}
 	case 'N':
 		// Server does not support SSL — this is a valid response, not an error
-		return greet.NewResult(ProtocolName, greet.TransportTCP, latency, true, &PostgreSQLResult{SSLSupported: false}), nil
+		return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, &PostgreSQLResult{SSLSupported: false}), nil
 	default:
 		return nil, &greet.GreetError{
 			Code:     ErrPostgreSQLMalformedResponse,

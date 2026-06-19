@@ -52,7 +52,7 @@ result, err := greet.Greet(ctx, "ssh", "github.com:22")
 if err != nil {
     // handle *greet.GreetError
 }
-fmt.Println(result.Success, result.Latency, result.Data)
+fmt.Println(result.Success, result.TTDR, result.RTT, result.TTFB, result.TTLB, result.Data)
 ```
 
 Customize behavior with functional options:
@@ -116,19 +116,27 @@ greet tls expired.badssl.com:443
 
 ### Output
 
-All commands output structured JSON to stdout:
+All commands output structured results to stdout with timing metrics.
+All four timing metrics share the same starting anchor time:
 
-```json
-{
-  "protocol": "ssh",
-  "transport": "tcp",
-  "latency": "45.123ms",
-  "latency_ms": 45.123,
-  "success": true,
-  "data": {
-    "version_string": "SSH-2.0-OpenSSH_8.9"
-  }
-}
+```
+|------|         TTDR: from start to when DNS resolves
+|------|--|      RTT:  from start to when first ACK at TCP transport or Receive at UDP
+|------|--|-|    TTFB: from start to when first byte response at the correct protocol layer
+|------|--|-------| TTLB: from start to when last byte response at the correct protocol layer
+```
+
+Example CLI output:
+
+```
+Protocol: ssh
+Transport: tcp
+TTDR: 12.345ms
+RTT: 34.567ms
+TTFB: 45.123ms
+TTLB: 45.200ms
+Success: true
+Version String: SSH-2.0-OpenSSH_8.9
 ```
 
 Errors are output as JSON to stderr:
@@ -204,17 +212,17 @@ graph TD
 ### Generic TCP
 
 - **Input**: Host, Port
-- **Output**: Success with latency, or an error code from Common + Generic TCP errors
+- **Output**: Success with TTDR/RTT/TTFB/TTLB timing, or an error code from Common + Generic TCP errors
 
 ### Generic UDP
 
 - **Input**: Host, Port
-- **Output**: Success with latency, or an error code from Common + Generic UDP errors
+- **Output**: Success with TTDR/RTT/TTFB/TTLB timing, or an error code from Common + Generic UDP errors
 
 ### SSH (TCP)
 
 - **Input**: Host, Port (default `22`)
-- **Output**: Success with server version string (e.g. `SSH-2.0-OpenSSH_8.9`) and latency, or an error code
+- **Output**: Success with server version string (e.g. `SSH-2.0-OpenSSH_8.9`) and TTDR/RTT/TTFB/TTLB timing, or an error code
 
 Inherits: Common + Generic TCP errors
 
@@ -226,7 +234,7 @@ Inherits: Common + Generic TCP errors
 ### PostgreSQL (TCP)
 
 - **Input**: Host, Port (default `5432`), SSL Mode (default `prefer`)
-- **Output**: Success with server version, auth type, and latency, or an error code
+- **Output**: Success with SSL support flag and TTDR/RTT/TTFB/TTLB timing, or an error code
 
 Inherits: Common + Generic TCP errors
 
@@ -240,7 +248,7 @@ Inherits: Common + Generic TCP errors
 ### Minecraft Java (TCP)
 
 - **Input**: Host, Port (default `25565`), Protocol Version (required, VarInt — e.g. `775` for Minecraft 26.1). Intent is automatically set to Status (1) by the library.
-- **Output**: Success with server status JSON (MOTD, players, version) and latency, or an error code
+- **Output**: Success with server status JSON (MOTD, players, version) and TTDR/RTT/TTFB/TTLB timing, or an error code
 
 Inherits: Common + Generic TCP errors
 
@@ -253,7 +261,7 @@ Inherits: Common + Generic TCP errors
 ### TLS (TCP)
 
 - **Input**: Host, Port (default `443`)
-- **Output**: Success with leaf certificate details, presented certificate chain, and latency, or an error code
+- **Output**: Success with leaf certificate details, presented certificate chain, and TTDR/RTT/TTFB/TTLB timing, or an error code
 
 Inherits: Common + Generic TCP errors
 

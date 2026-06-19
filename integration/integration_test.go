@@ -89,17 +89,52 @@ func cliKV(t *testing.T, args ...string) map[string]string {
 	return parseKeyValues(stdout)
 }
 
-// waitForPort retries a TCP connection until it succeeds or times out.
-func waitForPort(addr string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		cmd := exec.Command(cliPath, "tcp", addr)
-		if err := cmd.Run(); err == nil {
-			return nil
-		}
-		time.Sleep(1 * time.Second)
+// parseDuration parses a time.Duration string from the CLI output.
+func parseDuration(t *testing.T, s string) time.Duration {
+	t.Helper()
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		t.Fatalf("failed to parse duration %q: %v", s, err)
 	}
-	return fmt.Errorf("port %s not reachable after %v", addr, timeout)
+	return d
+}
+
+// assertTimingOrder verifies that TTDR <= RTT <= TTFB <= TTLB.
+func assertTimingOrder(t *testing.T, result map[string]string) {
+	t.Helper()
+
+	ttdr := parseDuration(t, result["TTDR"])
+	rtt := parseDuration(t, result["RTT"])
+	ttfb := parseDuration(t, result["TTFB"])
+	ttlb := parseDuration(t, result["TTLB"])
+
+	if ttdr > rtt {
+		t.Errorf("TTDR (%v) should be <= RTT (%v)", ttdr, rtt)
+	}
+	if rtt > ttfb {
+		t.Errorf("RTT (%v) should be <= TTFB (%v)", rtt, ttfb)
+	}
+	if ttfb > ttlb {
+		t.Errorf("TTFB (%v) should be <= TTLB (%v)", ttfb, ttlb)
+	}
+
+	t.Logf("Timing: TTDR=%v RTT=%v TTFB=%v TTLB=%v", ttdr, rtt, ttfb, ttlb)
+}
+
+// assertTimingFields verifies all four timing fields are present and non-zero.
+func assertTimingFields(t *testing.T, result map[string]string) {
+	t.Helper()
+	for _, field := range []string{"TTDR", "RTT", "TTFB", "TTLB"} {
+		val, ok := result[field]
+		if !ok {
+			t.Errorf("expected %s to be present in output", field)
+			continue
+		}
+		d := parseDuration(t, val)
+		if d < 0 {
+			t.Errorf("expected %s to be non-negative, got %v", field, d)
+		}
+	}
 }
 
 // ---- TCP generic ----
@@ -120,6 +155,9 @@ func TestIntegrationTCP(t *testing.T) {
 	if result["Transport"] != "tcp" {
 		t.Errorf("expected Transport=tcp, got %v", result["Transport"])
 	}
+
+	assertTimingFields(t, result)
+	assertTimingOrder(t, result)
 }
 
 // ---- UDP generic ----
@@ -136,6 +174,8 @@ func TestIntegrationUDP(t *testing.T) {
 		if result["Protocol"] != "udp" {
 			t.Errorf("expected Protocol=udp, got %v", result["Protocol"])
 		}
+		assertTimingFields(t, result)
+		assertTimingOrder(t, result)
 	}
 }
 
@@ -158,6 +198,9 @@ func TestIntegrationSSH(t *testing.T) {
 	if !strings.HasPrefix(versionStr, "SSH-") {
 		t.Errorf("expected Version String to start with SSH-, got %q", versionStr)
 	}
+
+	assertTimingFields(t, result)
+	assertTimingOrder(t, result)
 }
 
 // ---- PostgreSQL ----
@@ -179,6 +222,9 @@ func TestIntegrationPostgreSQL(t *testing.T) {
 	if result["SSL Supported"] != "false" {
 		t.Errorf("expected SSL Supported=false, got %v", result["SSL Supported"])
 	}
+
+	assertTimingFields(t, result)
+	assertTimingOrder(t, result)
 }
 
 func TestIntegrationPostgreSQLDisableSSL(t *testing.T) {
@@ -197,6 +243,9 @@ func TestIntegrationPostgreSQLDisableSSL(t *testing.T) {
 	if result["SSL Supported"] != "false" {
 		t.Errorf("expected SSL Supported=false with --sslmode=disable, got %v", result["SSL Supported"])
 	}
+
+	assertTimingFields(t, result)
+	assertTimingOrder(t, result)
 }
 
 // ---- Minecraft ----
@@ -226,6 +275,9 @@ func TestIntegrationMinecraft(t *testing.T) {
 	if _, ok := result["Players Max"]; !ok {
 		t.Errorf("expected Players Max to be present")
 	}
+
+	assertTimingFields(t, result)
+	assertTimingOrder(t, result)
 }
 
 // ---- CLI commands ----
@@ -249,4 +301,17 @@ func TestIntegrationCLIUnknownProtocol(t *testing.T) {
 	if !strings.Contains(stderr, "unknown protocol") {
 		t.Errorf("expected 'unknown protocol' in stderr, got: %s", stderr)
 	}
+}
+
+// waitForPort retries a TCP connection until it succeeds or times out.
+func waitForPort(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command(cliPath, "tcp", addr)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("port %s not reachable after %v", addr, timeout)
 }

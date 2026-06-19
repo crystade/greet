@@ -7,7 +7,43 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// DNSResult holds the outcome of DNS resolution.
+type DNSResult struct {
+	Address string        // resolved IP address
+	TTDR    time.Duration // time to DNS resolved
+}
+
+// ResolveHost resolves a hostname to an IP address and measures TTDR.
+// If host is already an IP address, it returns immediately with TTDR ≈ 0.
+func ResolveHost(ctx context.Context, host string) (*DNSResult, error) {
+	start := time.Now()
+
+	// Short-circuit if host is already an IP address
+	if ip := net.ParseIP(host); ip != nil {
+		return &DNSResult{Address: host, TTDR: time.Since(start)}, nil
+	}
+
+	resolver := &net.Resolver{}
+	addrs, err := resolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil, &GreetError{
+			Code:    ErrResolveHostFailed,
+			Message: fmt.Sprintf("failed to resolve host %q: %v", host, err),
+			Cause:   err,
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, &GreetError{
+			Code:    ErrResolveHostFailed,
+			Message: fmt.Sprintf("no addresses found for host %q", host),
+		}
+	}
+
+	return &DNSResult{Address: addrs[0], TTDR: time.Since(start)}, nil
+}
 
 // Greet is the one-stop entry point. It looks up the protocol by name,
 // resolves the target (host or host:port), and performs the handshake.

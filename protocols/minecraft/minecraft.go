@@ -116,11 +116,21 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-
 	start := time.Now()
+
+	// Phase 1: DNS resolution
+	dns, err := greet.ResolveHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ttdr := dns.TTDR
+
+	// Phase 2: TCP connection (measures RTT from start)
+	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
+	rtt := time.Since(start)
+
 	if err != nil {
 		return nil, classifyTCPError(err, host, port)
 	}
@@ -143,14 +153,74 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 		return nil, err
 	}
 
-	// Read Status Response packet
-	result, err := readStatusResponse(br)
-	latency := time.Since(start)
+	// Phase 3: Read raw Status Response bytes from network
+	// Read packet length
+	if _, err = readVarInt(br); err != nil {
+		return nil, &greet.GreetError{
+			Code:     ErrMinecraftMalformedResponse,
+			Message:  "failed to read response packet length",
+			Protocol: ProtocolName,
+			Cause:    err,
+		}
+	}
+	ttfb := time.Since(start)
+
+	// Read packet ID
+	packetID, err := readVarInt(br)
+	if err != nil {
+		return nil, &greet.GreetError{
+			Code:     ErrMinecraftMalformedResponse,
+			Message:  "failed to read response packet ID",
+			Protocol: ProtocolName,
+			Cause:    err,
+		}
+	}
+	if packetID != 0x00 {
+		return nil, &greet.GreetError{
+			Code:     ErrMinecraftMalformedResponse,
+			Message:  fmt.Sprintf("unexpected packet ID: 0x%02x (expected 0x00)", packetID),
+			Protocol: ProtocolName,
+		}
+	}
+
+	// Read JSON string length
+	jsonLen, err := readVarInt(br)
+	if err != nil {
+		return nil, &greet.GreetError{
+			Code:     ErrMinecraftMalformedResponse,
+			Message:  "failed to read JSON string length",
+			Protocol: ProtocolName,
+			Cause:    err,
+		}
+	}
+	if jsonLen <= 0 || jsonLen > 32768 {
+		return nil, &greet.GreetError{
+			Code:     ErrMinecraftMalformedResponse,
+			Message:  fmt.Sprintf("invalid JSON string length: %d", jsonLen),
+			Protocol: ProtocolName,
+		}
+	}
+
+	// Read JSON string
+	jsonBytes := make([]byte, jsonLen)
+	_, err = io.ReadFull(br, jsonBytes)
+	if err != nil {
+		return nil, &greet.GreetError{
+			Code:     ErrMinecraftMalformedResponse,
+			Message:  "failed to read JSON response body",
+			Protocol: ProtocolName,
+			Cause:    err,
+		}
+	}
+
+	// Phase 4: Parse JSON (CPU-bound, no network I/O)
+	result, err := parseStatusResponse(jsonBytes)
+	ttlb := time.Since(start) // TTLB = JSON fully parsed
 	if err != nil {
 		return nil, err
 	}
 
-	return greet.NewResult(ProtocolName, greet.TransportTCP, latency, true, result), nil
+	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, result), nil
 }
 
 // sendHandshake builds and sends the Handshake packet.
@@ -216,68 +286,9 @@ func classifyWriteErrorCode(err error) greet.ErrorCode {
 	return ErrMinecraftHandshakeFailed
 }
 
-// readStatusResponse reads and parses the Status Response packet.
-func readStatusResponse(r io.Reader) (*MinecraftResult, error) {
-	// Read packet length
-	_, err := readVarInt(r)
-	if err != nil {
-		return nil, &greet.GreetError{
-			Code:     ErrMinecraftMalformedResponse,
-			Message:  "failed to read response packet length",
-			Protocol: ProtocolName,
-			Cause:    err,
-		}
-	}
-
-	// Read packet ID
-	packetID, err := readVarInt(r)
-	if err != nil {
-		return nil, &greet.GreetError{
-			Code:     ErrMinecraftMalformedResponse,
-			Message:  "failed to read response packet ID",
-			Protocol: ProtocolName,
-			Cause:    err,
-		}
-	}
-	if packetID != 0x00 {
-		return nil, &greet.GreetError{
-			Code:     ErrMinecraftMalformedResponse,
-			Message:  fmt.Sprintf("unexpected packet ID: 0x%02x (expected 0x00)", packetID),
-			Protocol: ProtocolName,
-		}
-	}
-
-	// Read JSON string length
-	jsonLen, err := readVarInt(r)
-	if err != nil {
-		return nil, &greet.GreetError{
-			Code:     ErrMinecraftMalformedResponse,
-			Message:  "failed to read JSON string length",
-			Protocol: ProtocolName,
-			Cause:    err,
-		}
-	}
-	if jsonLen <= 0 || jsonLen > 32768 {
-		return nil, &greet.GreetError{
-			Code:     ErrMinecraftMalformedResponse,
-			Message:  fmt.Sprintf("invalid JSON string length: %d", jsonLen),
-			Protocol: ProtocolName,
-		}
-	}
-
-	// Read JSON string
-	jsonBytes := make([]byte, jsonLen)
-	_, err = io.ReadFull(r, jsonBytes)
-	if err != nil {
-		return nil, &greet.GreetError{
-			Code:     ErrMinecraftMalformedResponse,
-			Message:  "failed to read JSON response body",
-			Protocol: ProtocolName,
-			Cause:    err,
-		}
-	}
-
-	// Parse JSON
+// parseStatusResponse parses raw JSON bytes into a MinecraftResult.
+// This phase is CPU-bound only (no network I/O).
+func parseStatusResponse(jsonBytes []byte) (*MinecraftResult, error) {
 	var status statusResponseJSON
 	if err := json.Unmarshal(jsonBytes, &status); err != nil {
 		return nil, &greet.GreetError{

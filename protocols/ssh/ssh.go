@@ -41,11 +41,21 @@ func (s *SSH) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-
 	start := time.Now()
+
+	// Phase 1: DNS resolution
+	dns, err := greet.ResolveHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	ttdr := dns.TTDR
+
+	// Phase 2: TCP connection (measures RTT from start)
+	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
+	rtt := time.Since(start)
+
 	if err != nil {
 		return nil, classifyTCPError(err, host, port)
 	}
@@ -57,11 +67,13 @@ func (s *SSH) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		conn.SetReadDeadline(deadline)
 	}
 
+	// Phase 3: Read SSH banner (measures TTFB and TTLB from start)
 	// Limit read to 8KB to prevent unbounded allocation from
 	// malicious servers. RFC 4253 §4.2 allows pre-auth banners before
 	// the version string, so we loop until we find "SSH-".
 	reader := bufio.NewReader(io.LimitReader(conn, 8192))
 	var banner string
+	var ttfb time.Duration
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -84,13 +96,14 @@ func (s *SSH) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "SSH-") {
 			banner = line
+			ttfb = time.Since(start) // TTFB = first byte of SSH banner
 			break
 		}
 		// Skip non-SSH pre-auth banner lines (RFC 4253 §4.2)
 	}
-	latency := time.Since(start)
+	ttlb := time.Since(start) // TTLB = banner fully read
 
-	return greet.NewResult(ProtocolName, greet.TransportTCP, latency, true, &SSHResult{
+	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, &SSHResult{
 		VersionString: banner,
 	}), nil
 }
