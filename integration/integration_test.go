@@ -120,7 +120,7 @@ func parseResult(output string) cliResult {
 			continue
 		}
 		key := trimmed[:idx]
-		val := trimmed[idx+2:]
+		val := strings.TrimSpace(trimmed[idx+2:])
 		if cur == nil {
 			res.top[key] = val
 		} else {
