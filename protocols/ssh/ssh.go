@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,45 +29,22 @@ type SSHResult struct {
 // sending its own banner (anonymous probe).
 type SSH struct{}
 
-func (s *SSH) Name() string               { return ProtocolName }
-func (s *SSH) Description() string        { return "SSH version banner exchange" }
-func (s *SSH) DefaultPort() int           { return DefaultSSHPort }
-func (s *SSH) Transport() greet.Transport { return greet.TransportTCP }
+func (s *SSH) Name() string                   { return ProtocolName }
+func (s *SSH) Description() string            { return "SSH version banner exchange" }
+func (s *SSH) DefaultPort() int               { return DefaultSSHPort }
+func (s *SSH) BaseTransport() greet.Transport { return greet.TransportTCP }
 
-func (s *SSH) Greet(ctx context.Context, host string, port int, opts ...greet.GreetOption) (*greet.GreetResult, error) {
-	cfg := greet.ResolveOptions(opts...)
-
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	// Phase 1: DNS resolution
-	dns, err := greet.ResolveHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	ttdr := dns.TTDR
-
-	// Phase 2: TCP connection (measures RTT from start)
-	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	rtt := time.Since(start)
-
-	if err != nil {
-		return nil, classifyTCPError(err, host, port)
-	}
-	defer conn.Close()
+// Handshake reads the SSH version banner over an already-dialed conn.
+// start is the shared timing anchor from the transport dial.
+func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// Set read deadline from context
-	deadline, ok := ctx.Deadline()
-	if ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetReadDeadline(deadline)
 	}
 
-	// Phase 3: Read SSH banner (measures TTFB and TTLB from start)
-	// Limit read to 8KB to prevent unbounded allocation from
+	// Read SSH banner. Limit to 8KB to prevent unbounded allocation from
 	// malicious servers. RFC 4253 §4.2 allows pre-auth banners before
 	// the version string, so we loop until we find "SSH-".
 	reader := bufio.NewReader(io.LimitReader(conn, 8192))
@@ -79,14 +55,14 @@ func (s *SSH) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
-				return nil, &greet.GreetError{
+				return nil, greet.LayerTiming{}, &greet.GreetError{
 					Code:     ErrSSHBannerTimeout,
 					Message:  fmt.Sprintf("timed out reading SSH banner from %s", addr),
 					Protocol: ProtocolName,
 					Cause:    err,
 				}
 			}
-			return nil, &greet.GreetError{
+			return nil, greet.LayerTiming{}, &greet.GreetError{
 				Code:     ErrSSHInvalidBanner,
 				Message:  fmt.Sprintf("failed to read SSH banner from %s: %v", addr, err),
 				Protocol: ProtocolName,
@@ -103,11 +79,9 @@ func (s *SSH) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 	}
 	ttlb := time.Since(start) // TTLB = banner fully read
 
-	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, &SSHResult{
-		VersionString: banner,
-	}), nil
+	return &SSHResult{VersionString: banner}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 }
 
 func init() {
-	greet.Register(&SSH{})
+	greet.RegisterApp(&SSH{})
 }

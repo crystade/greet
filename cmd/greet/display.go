@@ -1,36 +1,56 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 
 	"github.com/crystade/greet"
+	"github.com/crystade/greet/jsonapi"
 )
 
-// dataPrinter is a function that displays protocol-specific data fields to stdout.
-type dataPrinter func(result *greet.GreetResult)
+// layerDataPrinter prints protocol-specific fields for a single LayerResult.
+type layerDataPrinter func(layer greet.LayerResult)
 
-// dataPrinters is a registry of per-protocol display functions, keyed by protocol name.
-var dataPrinters = map[string]dataPrinter{}
+// layerPrinters is a registry of per-layer display functions, keyed by layer name.
+var layerPrinters = map[string]layerDataPrinter{}
 
-// registerDataPrinter registers a display function for a protocol name.
-func registerDataPrinter(name string, fn dataPrinter) {
-	dataPrinters[name] = fn
+// registerLayerPrinter registers a display function for a layer name.
+func registerLayerPrinter(name string, fn layerDataPrinter) {
+	layerPrinters[name] = fn
 }
 
-// printResult writes the result fields to stdout as plain text, one field per line.
+// printResult writes the aggregated result to stdout.
+// Transport-level metrics are printed first, then each app layer's timing and data.
 func printResult(result *greet.GreetResult) {
-	fmt.Printf("Protocol: %s\n", result.Protocol)
+	fmt.Printf("Protocol:  %s\n", result.Protocol)
 	fmt.Printf("Transport: %s\n", result.Transport)
-	fmt.Printf("TTDR: %s\n", result.TTDR)
-	fmt.Printf("RTT: %s\n", result.RTT)
-	fmt.Printf("TTFB: %s\n", result.TTFB)
-	fmt.Printf("TTLB: %s\n", result.TTLB)
-	fmt.Printf("Success: %v\n", result.Success)
+	fmt.Printf("TTDR:      %s\n", result.TTDR)
+	fmt.Printf("RTT:       %s\n", result.RTT)
+	fmt.Printf("Success:   %v\n", result.Success)
 
-	if printer, ok := dataPrinters[result.Protocol]; ok {
-		printer(result)
+	for _, layer := range result.Layers {
+		fmt.Printf("\n[%s]\n", layer.Name)
+		fmt.Printf("  TTFB:    %s\n", layer.TTFB)
+		fmt.Printf("  TTLB:    %s\n", layer.TTLB)
+		fmt.Printf("  Success: %v\n", layer.Success)
+		if printer, ok := layerPrinters[layer.Name]; ok {
+			printer(layer)
+		}
+	}
+}
+
+// printResultJSON writes the result as indented JSON to stdout using the
+// jsonapi models. Protocol-specific payloads are mapped via the registered
+// jsonapi mappers (imported via jsonapi/all in main).
+func printResultJSON(result *greet.GreetResult) {
+	resp := jsonapi.FromGreetResult(result)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(resp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to encode JSON: %v\n", err)
+		os.Exit(1)
 	}
 }
 

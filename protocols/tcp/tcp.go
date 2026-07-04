@@ -9,51 +9,42 @@ import (
 	"github.com/crystade/greet"
 )
 
-// ProtocolName is the registered name for the TCP protocol.
+// ProtocolName is the registered name for the TCP transport.
 const ProtocolName = "tcp"
 
-// DefaultTCPPort is the well-known port for generic TCP probes.
+// DefaultTCPPort is the fallback port for generic TCP probes.
 const DefaultTCPPort = 80
 
-// TCP implements a generic TCP dial-and-close probe.
-// It measures connection timing without sending any application data.
+// TCP implements greet.TransportLayer for plain TCP connections.
+// It resolves DNS, dials, and returns the open conn together with TTDR and RTT.
+// It sends no application data.
 type TCP struct{}
 
 func (t *TCP) Name() string               { return ProtocolName }
-func (t *TCP) Description() string        { return "Generic TCP dial + close" }
 func (t *TCP) DefaultPort() int           { return DefaultTCPPort }
 func (t *TCP) Transport() greet.Transport { return greet.TransportTCP }
 
-func (t *TCP) Greet(ctx context.Context, host string, port int, opts ...greet.GreetOption) (*greet.GreetResult, error) {
-	cfg := greet.ResolveOptions(opts...)
-
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	// Phase 1: DNS resolution
+// Dial resolves host, establishes a TCP connection, and returns it open.
+// start is the shared timing anchor owned by the engine; TTDR and RTT are
+// measured relative to it. The caller is responsible for closing conn.
+func (t *TCP) Dial(ctx context.Context, start time.Time, host string, port int) (net.Conn, time.Duration, time.Duration, error) {
 	dns, err := greet.ResolveHost(ctx, host)
 	if err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
-	ttdr := dns.TTDR
+	ttdr := time.Since(start) // anchored to the shared start
 
-	// Phase 2: TCP connection (measures RTT from start)
 	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	rtt := time.Since(start)
 
 	if err != nil {
-		return nil, classifyTCPError(err, host, port)
+		return nil, ttdr, rtt, classifyTCPError(err, host, port)
 	}
-	conn.Close()
-
-	// No application data — TTFB and TTLB equal RTT
-	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, rtt, rtt, true, nil), nil
+	return conn, ttdr, rtt, nil
 }
 
 func init() {
-	greet.Register(&TCP{})
+	greet.RegisterTransport(&TCP{})
 }

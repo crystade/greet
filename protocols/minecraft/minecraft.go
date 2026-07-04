@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/crystade/greet"
@@ -73,13 +72,12 @@ type statusResponseJSON struct {
 // It is stateless — all configuration is passed via GreetOption.
 type Minecraft struct{}
 
-func (m *Minecraft) Name() string               { return ProtocolName }
-func (m *Minecraft) Description() string        { return "Minecraft Java Edition handshake + status request" }
-func (m *Minecraft) DefaultPort() int           { return DefaultMinecraftPort }
-func (m *Minecraft) Transport() greet.Transport { return greet.TransportTCP }
+func (m *Minecraft) Name() string                   { return ProtocolName }
+func (m *Minecraft) Description() string            { return "Minecraft Java Edition handshake + status request" }
+func (m *Minecraft) DefaultPort() int               { return DefaultMinecraftPort }
+func (m *Minecraft) BaseTransport() greet.Transport { return greet.TransportTCP }
 
 func (m *Minecraft) RegisterFlags(fs *flag.FlagSet) {
-	// Register flags on the FlagSet; ParseFlags reads the values back.
 	fs.Int("protocol-version", 775, "Minecraft protocol version (e.g. 775 for 26.1)")
 }
 
@@ -92,52 +90,26 @@ func (m *Minecraft) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
 			}
 		}
 	}
-	cfg := &MinecraftConfig{ProtocolVersion: ver}
-	return []greet.GreetOption{greet.WithProtocolConfig(cfg)}, nil
+	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &MinecraftConfig{ProtocolVersion: ver})}, nil
 }
 
-func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...greet.GreetOption) (*greet.GreetResult, error) {
-	cfg := greet.ResolveOptions(opts...)
+func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
 
-	// Resolve protocol-specific config
+	// Resolve per-layer config
 	protoVersion := 775
-	if cfg.ProtocolConfig != nil {
-		mcCfg, ok := cfg.ProtocolConfig.(*MinecraftConfig)
+	if raw := cfg.LayerConfig(ProtocolName); raw != nil {
+		mcCfg, ok := raw.(*MinecraftConfig)
 		if !ok {
-			return nil, &greet.GreetError{
+			return nil, greet.LayerTiming{}, &greet.GreetError{
 				Code:     greet.ErrInvalidConfig,
-				Message:  fmt.Sprintf("invalid protocol config: expected *MinecraftConfig, got %T", cfg.ProtocolConfig),
+				Message:  fmt.Sprintf("invalid layer config: expected *MinecraftConfig, got %T", raw),
 				Protocol: ProtocolName,
 			}
 		}
 		protoVersion = mcCfg.ProtocolVersion
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	// Phase 1: DNS resolution
-	dns, err := greet.ResolveHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	ttdr := dns.TTDR
-
-	// Phase 2: TCP connection (measures RTT from start)
-	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	rtt := time.Since(start)
-
-	if err != nil {
-		return nil, classifyTCPError(err, host, port)
-	}
-	defer conn.Close()
-
-	deadline, ok := ctx.Deadline()
-	if ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
 
@@ -145,18 +117,18 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 
 	// Send Handshake packet
 	if err := sendHandshake(conn, host, port, protoVersion); err != nil {
-		return nil, err
+		return nil, greet.LayerTiming{}, err
 	}
 
 	// Send Status Request packet
 	if err := sendStatusRequest(conn); err != nil {
-		return nil, err
+		return nil, greet.LayerTiming{}, err
 	}
 
 	// Phase 3: Read raw Status Response bytes from network
 	// Read packet length
-	if _, err = readVarInt(br); err != nil {
-		return nil, &greet.GreetError{
+	if _, err := readVarInt(br); err != nil {
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read response packet length",
 			Protocol: ProtocolName,
@@ -168,7 +140,7 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 	// Read packet ID
 	packetID, err := readVarInt(br)
 	if err != nil {
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read response packet ID",
 			Protocol: ProtocolName,
@@ -176,7 +148,7 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 		}
 	}
 	if packetID != 0x00 {
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  fmt.Sprintf("unexpected packet ID: 0x%02x (expected 0x00)", packetID),
 			Protocol: ProtocolName,
@@ -186,7 +158,7 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 	// Read JSON string length
 	jsonLen, err := readVarInt(br)
 	if err != nil {
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read JSON string length",
 			Protocol: ProtocolName,
@@ -194,7 +166,7 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 		}
 	}
 	if jsonLen <= 0 || jsonLen > 32768 {
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  fmt.Sprintf("invalid JSON string length: %d", jsonLen),
 			Protocol: ProtocolName,
@@ -203,9 +175,8 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 
 	// Read JSON string
 	jsonBytes := make([]byte, jsonLen)
-	_, err = io.ReadFull(br, jsonBytes)
-	if err != nil {
-		return nil, &greet.GreetError{
+	if _, err = io.ReadFull(br, jsonBytes); err != nil {
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read JSON response body",
 			Protocol: ProtocolName,
@@ -217,10 +188,10 @@ func (m *Minecraft) Greet(ctx context.Context, host string, port int, opts ...gr
 	result, err := parseStatusResponse(jsonBytes)
 	ttlb := time.Since(start) // TTLB = JSON fully parsed
 	if err != nil {
-		return nil, err
+		return nil, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, err
 	}
 
-	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, result), nil
+	return result, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 }
 
 // sendHandshake builds and sends the Handshake packet.
@@ -381,5 +352,5 @@ func writeString(w io.Writer, s string) error {
 }
 
 func init() {
-	greet.Register(&Minecraft{})
+	greet.RegisterApp(&Minecraft{})
 }

@@ -12,8 +12,8 @@ func printPostgreSQLData(data *postgresql.PostgreSQLResult) {
 }
 
 func init() {
-	registerDataPrinter("postgresql", func(result *greet.GreetResult) {
-		if pg, ok := result.Data.(*postgresql.PostgreSQLResult); ok {
+	registerLayerPrinter("postgresql", func(layer greet.LayerResult) {
+		if pg, ok := layer.Data.(*postgresql.PostgreSQLResult); ok {
 			printPostgreSQLData(pg)
 		}
 	})

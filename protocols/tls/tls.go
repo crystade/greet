@@ -7,14 +7,12 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/tls"
+	cryptotls "crypto/tls"
 	"crypto/x509"
-	"errors"
 	"fmt"
 	"net"
 	"net/netip"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -59,68 +57,44 @@ type TLSResult struct {
 	Status []string `json:"status"`
 }
 
-// TLS implements a TLS connectivity and certificate probe.
-// It connects via TLS with InsecureSkipVerify, extracts the leaf
-// certificate, and reports Chrome-style CERT_ status checks.
+// TLS implements a TLS connectivity and certificate probe as an AppLayer.
+// It performs a TLS handshake over an already-dialed net.Conn, with
+// InsecureSkipVerify, and reports Chrome-style CERT_ status checks.
 type TLS struct{}
 
-func (t *TLS) Name() string               { return ProtocolName }
-func (t *TLS) Description() string        { return "TLS leaf certificate check" }
-func (t *TLS) DefaultPort() int           { return DefaultTLSPort }
-func (t *TLS) Transport() greet.Transport { return greet.TransportTCP }
+func (t *TLS) Name() string                   { return ProtocolName }
+func (t *TLS) Description() string            { return "TLS certificate check" }
+func (t *TLS) DefaultPort() int               { return DefaultTLSPort }
+func (t *TLS) BaseTransport() greet.Transport { return greet.TransportTCP }
 
-func (t *TLS) Greet(ctx context.Context, host string, port int, opts ...greet.GreetOption) (*greet.GreetResult, error) {
-	cfg := greet.ResolveOptions(opts...)
+// Handshake upgrades conn to TLS, performs the handshake, and returns the
+// certificate chain with Chrome-style status checks.
+func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
 
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	// Phase 1: DNS resolution
-	dns, err := greet.ResolveHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	ttdr := dns.TTDR
-
-	// Phase 2: TCP connection (measures RTT from start)
-	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
-	var d net.Dialer
-	tcpConn, err := d.DialContext(ctx, "tcp", addr)
-	rtt := time.Since(start)
-
-	if err != nil {
-		return nil, classifyTCPError(err, host, port)
-	}
-	defer tcpConn.Close()
-
-	// Phase 3: TLS handshake (measures TTFB/TTLB from start)
-	tlsConn := tls.Client(tcpConn, &tls.Config{
-		InsecureSkipVerify: true,
+	tlsConn := cryptotls.Client(conn, &cryptotls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // intentional: we report cert status, not enforce it
 		ServerName:         host,
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrTLSHandshakeFailed,
 			Message:  fmt.Sprintf("TLS handshake with %s:%d failed: %v", host, port, err),
 			Protocol: ProtocolName,
 			Cause:    err,
 		}
 	}
-	ttfb := time.Since(start) // TTFB = TLS handshake complete (certificate chain available)
-	ttlb := ttfb              // TLS handshake is atomic — TTLB equals TTFB
+	ttfb := time.Since(start) // TLS handshake is atomic — TTFB = TTLB
+	ttlb := ttfb
 
 	state := tlsConn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrTLSHandshakeFailed,
 			Message:  fmt.Sprintf("TLS handshake with %s:%d completed but no certificates presented", host, port),
 			Protocol: ProtocolName,
 		}
 	}
 
-	// Build the certificate chain (leaf → root) with per-cert status.
 	chain := make([]CertChainEntry, len(state.PeerCertificates))
 	var chainStatus []string
 	for i, cert := range state.PeerCertificates {
@@ -148,8 +122,6 @@ func (t *TLS) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 			Status:            certStatus,
 		}
 
-		// The chain status is determined by the first cert (leaf→root)
-		// that has a non-OK status.
 		if chainStatus == nil && slices.ContainsFunc(certStatus, func(s string) bool { return s != "OK" }) {
 			chainStatus = certStatus
 		}
@@ -158,42 +130,7 @@ func (t *TLS) Greet(ctx context.Context, host string, port int, opts ...greet.Gr
 		chainStatus = []string{"OK"}
 	}
 
-	result := &TLSResult{
-		CertChain: chain,
-		Status:    chainStatus,
-	}
-
-	return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, result), nil
-}
-
-// isTCPError returns true if the error comes from a TCP dial attempt
-// (as opposed to a TLS handshake failure after connecting).
-// It checks for net.OpError where Op is "dial".
-func isTCPError(err error) bool {
-	var opErr *net.OpError
-	if err == nil {
-		return false
-	}
-	// A TCP dial error is a *net.OpError with Op="dial"
-	if errors.As(err, &opErr) && opErr.Op == "dial" {
-		return true
-	}
-	// Unwrap once — tls.DialWithDialer may wrap the dial error
-	if ue, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, e := range ue.Unwrap() {
-			if errors.As(e, &opErr) && opErr.Op == "dial" {
-				return true
-			}
-		}
-	}
-	if ue, ok := err.(interface{ Unwrap() error }); ok {
-		if inner := ue.Unwrap(); inner != nil {
-			if errors.As(inner, &opErr) && opErr.Op == "dial" {
-				return true
-			}
-		}
-	}
-	return false
+	return &TLSResult{CertChain: chain, Status: chainStatus}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 }
 
 // checkCert runs Chrome-style CERT_ error checks on a certificate.
@@ -306,5 +243,5 @@ func hasLocalNetworkNames(cert *x509.Certificate) bool {
 }
 
 func init() {
-	greet.Register(&TLS{})
+	greet.RegisterApp(&TLS{})
 }

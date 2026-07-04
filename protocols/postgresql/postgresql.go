@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"time"
 
 	"github.com/crystade/greet"
@@ -42,13 +41,12 @@ type PostgreSQLResult struct {
 // It is stateless — all configuration is passed via GreetOption.
 type PostgreSQL struct{}
 
-func (p *PostgreSQL) Name() string               { return ProtocolName }
-func (p *PostgreSQL) Description() string        { return "PostgreSQL startup packet exchange" }
-func (p *PostgreSQL) DefaultPort() int           { return DefaultPostgreSQLPort }
-func (p *PostgreSQL) Transport() greet.Transport { return greet.TransportTCP }
+func (p *PostgreSQL) Name() string                   { return ProtocolName }
+func (p *PostgreSQL) Description() string            { return "PostgreSQL startup packet exchange" }
+func (p *PostgreSQL) DefaultPort() int               { return DefaultPostgreSQLPort }
+func (p *PostgreSQL) BaseTransport() greet.Transport { return greet.TransportTCP }
 
 func (p *PostgreSQL) RegisterFlags(fs *flag.FlagSet) {
-	// Register flags on the FlagSet; ParseFlags reads the values back.
 	fs.String("sslmode", "prefer", "SSL mode: prefer (try SSL) or disable (skip SSL)")
 }
 
@@ -60,59 +58,35 @@ func (p *PostgreSQL) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
 	default:
 		return nil, fmt.Errorf("invalid sslmode %q: must be 'prefer' or 'disable'", sslMode)
 	}
-	cfg := &PostgreSQLConfig{SSLMode: sslMode}
-	return []greet.GreetOption{greet.WithProtocolConfig(cfg)}, nil
+	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &PostgreSQLConfig{SSLMode: sslMode})}, nil
 }
 
-func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...greet.GreetOption) (*greet.GreetResult, error) {
-	cfg := greet.ResolveOptions(opts...)
+func (p *PostgreSQL) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
 
-	// Resolve protocol-specific config
+	// Resolve per-layer config
 	sslMode := "prefer"
-	if cfg.ProtocolConfig != nil {
-		pgCfg, ok := cfg.ProtocolConfig.(*PostgreSQLConfig)
+	if raw := cfg.LayerConfig(ProtocolName); raw != nil {
+		pgCfg, ok := raw.(*PostgreSQLConfig)
 		if !ok {
-			return nil, &greet.GreetError{
+			return nil, greet.LayerTiming{}, &greet.GreetError{
 				Code:     greet.ErrInvalidConfig,
-				Message:  fmt.Sprintf("invalid protocol config: expected *PostgreSQLConfig, got %T", cfg.ProtocolConfig),
+				Message:  fmt.Sprintf("invalid layer config: expected *PostgreSQLConfig, got %T", raw),
 				Protocol: ProtocolName,
 			}
 		}
 		sslMode = pgCfg.SSLMode
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	start := time.Now()
-
-	// Phase 1: DNS resolution
-	dns, err := greet.ResolveHost(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	ttdr := dns.TTDR
-
-	// Phase 2: TCP connection (measures RTT from start)
-	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
-	var d net.Dialer
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	rtt := time.Since(start)
-
-	if err != nil {
-		return nil, classifyTCPError(err, host, port)
-	}
-	defer conn.Close()
-
-	deadline, ok := ctx.Deadline()
-	if ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
 
+	addr := conn.RemoteAddr().String()
+
 	if sslMode == "disable" {
-		// Skip SSL probe, just confirm TCP connection
-		ttfb := rtt // no app data — TTFB equals RTT
-		return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttfb, true, &PostgreSQLResult{SSLSupported: false}), nil
+		// Skip SSL probe — TCP connection alone is the result.
+		now := time.Since(start)
+		return &PostgreSQLResult{SSLSupported: false}, greet.LayerTiming{TTFB: now, TTLB: now}, nil
 	}
 
 	// Phase 3: Send SSLRequest and read response (measures TTFB/TTLB from start)
@@ -120,14 +94,14 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 	binary.BigEndian.PutUint32(sslReq[0:4], 8)               // length = 8
 	binary.BigEndian.PutUint32(sslReq[4:8], SSLRequestMagic) // code = 80877103
 
-	_, err = conn.Write(sslReq)
+	_, err := conn.Write(sslReq)
 	if err != nil {
 		code := ErrPostgreSQLSendFailed
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			code = ErrPostgreSQLStartupTimeout
 		}
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     code,
 			Message:  fmt.Sprintf("failed to send SSLRequest to %s: %v", addr, err),
 			Protocol: ProtocolName,
@@ -137,43 +111,41 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 
 	// Read single-byte response
 	resp := make([]byte, 1)
-	_, err = io.ReadFull(conn, resp)
+	_, readErr := io.ReadFull(conn, resp)
 	ttfb := time.Since(start) // TTFB = first (and only) byte of response
 	ttlb := ttfb              // single byte response — TTLB equals TTFB
 
-	if err != nil {
+	if readErr != nil {
 		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return nil, &greet.GreetError{
+		if errors.As(readErr, &netErr) && netErr.Timeout() {
+			return nil, greet.LayerTiming{}, &greet.GreetError{
 				Code:     ErrPostgreSQLStartupTimeout,
 				Message:  fmt.Sprintf("timed out reading PostgreSQL response from %s", addr),
 				Protocol: ProtocolName,
-				Cause:    err,
+				Cause:    readErr,
 			}
 		}
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrPostgreSQLMalformedResponse,
-			Message:  fmt.Sprintf("failed to read PostgreSQL response from %s: %v", addr, err),
+			Message:  fmt.Sprintf("failed to read PostgreSQL response from %s: %v", addr, readErr),
 			Protocol: ProtocolName,
-			Cause:    err,
+			Cause:    readErr,
 		}
 	}
 
 	switch resp[0] {
 	case 'S':
-		// Server supports SSL
-		return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, &PostgreSQLResult{SSLSupported: true}), nil
+		return &PostgreSQLResult{SSLSupported: true}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 	case 'E':
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrPostgreSQLSSLRejected,
 			Message:  fmt.Sprintf("PostgreSQL server at %s rejected SSL request", addr),
 			Protocol: ProtocolName,
 		}
 	case 'N':
-		// Server does not support SSL — this is a valid response, not an error
-		return greet.NewResult(ProtocolName, greet.TransportTCP, ttdr, rtt, ttfb, ttlb, true, &PostgreSQLResult{SSLSupported: false}), nil
+		return &PostgreSQLResult{SSLSupported: false}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 	default:
-		return nil, &greet.GreetError{
+		return nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrPostgreSQLMalformedResponse,
 			Message:  fmt.Sprintf("unexpected PostgreSQL response byte: 0x%02x", resp[0]),
 			Protocol: ProtocolName,
@@ -182,5 +154,5 @@ func (p *PostgreSQL) Greet(ctx context.Context, host string, port int, opts ...g
 }
 
 func init() {
-	greet.Register(&PostgreSQL{})
+	greet.RegisterApp(&PostgreSQL{})
 }

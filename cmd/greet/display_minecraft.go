@@ -15,8 +15,8 @@ func printMinecraftData(data *minecraft.MinecraftResult) {
 }
 
 func init() {
-	registerDataPrinter("minecraft", func(result *greet.GreetResult) {
-		if mc, ok := result.Data.(*minecraft.MinecraftResult); ok {
+	registerLayerPrinter("minecraft", func(layer greet.LayerResult) {
+		if mc, ok := layer.Data.(*minecraft.MinecraftResult); ok {
 			printMinecraftData(mc)
 		}
 	})

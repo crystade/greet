@@ -12,8 +12,8 @@ func printSSHData(data *ssh.SSHResult) {
 }
 
 func init() {
-	registerDataPrinter("ssh", func(result *greet.GreetResult) {
-		if s, ok := result.Data.(*ssh.SSHResult); ok {
+	registerLayerPrinter("ssh", func(layer greet.LayerResult) {
+		if s, ok := layer.Data.(*ssh.SSHResult); ok {
 			printSSHData(s)
 		}
 	})

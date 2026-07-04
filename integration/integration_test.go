@@ -60,33 +60,84 @@ func cliOutput(args ...string) (stdout, stderr string, exitCode int) {
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-// parseKeyValues parses "Key: Value" lines into a map.
-func parseKeyValues(output string) map[string]string {
-	result := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+// cliLayer holds one parsed layer block: its per-layer timing fields
+// (TTFB, TTLB, Success) plus any data-printer fields (e.g. "Version String").
+type cliLayer struct {
+	name   string
+	fields map[string]string
+}
+
+// cliResult is the parsed layered CLI output: top-level fields plus the
+// ordered list of layer blocks (transport first, then app layers).
+type cliResult struct {
+	top    map[string]string
+	layers []cliLayer
+}
+
+// layer returns the parsed layer block with the given name.
+func (r cliResult) layer(name string) (cliLayer, bool) {
+	for _, l := range r.layers {
+		if l.name == name {
+			return l, true
+		}
+	}
+	return cliLayer{}, false
+}
+
+// data searches every layer for a data-printer field (e.g. "SSL Supported").
+func (r cliResult) data(key string) (string, bool) {
+	for _, l := range r.layers {
+		if v, ok := l.fields[key]; ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// parseResult parses the layered CLI output. Lines before the first "[layer]"
+// header are top-level fields; a header like "[tcp]" starts a layer block, and
+// subsequent "Key: Value" lines (indented timings or unindented data-printer
+// output) attach to the most recent layer. Certificate-chain entries such as
+// "[0] (leaf)" are not treated as headers because they do not end with "]".
+func parseResult(output string) cliResult {
+	res := cliResult{top: map[string]string{}}
+	var cur *cliLayer
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
-		idx := strings.Index(line, ": ")
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			res.layers = append(res.layers, cliLayer{
+				name:   strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]"),
+				fields: map[string]string{},
+			})
+			cur = &res.layers[len(res.layers)-1]
+			continue
+		}
+		idx := strings.Index(trimmed, ": ")
 		if idx < 0 {
 			continue
 		}
-		key := line[:idx]
-		val := line[idx+2:]
-		result[key] = val
+		key := trimmed[:idx]
+		val := trimmed[idx+2:]
+		if cur == nil {
+			res.top[key] = val
+		} else {
+			cur.fields[key] = val
+		}
 	}
-	return result
+	return res
 }
 
-// cliKV runs the greet CLI, asserts exit code 0, and parses key-value output.
-func cliKV(t *testing.T, args ...string) map[string]string {
+// cliRun runs the greet CLI, asserts exit code 0, and parses the layered output.
+func cliRun(t *testing.T, args ...string) cliResult {
 	t.Helper()
 	stdout, stderr, code := cliOutput(args...)
 	if code != 0 {
 		t.Fatalf("greet %v exited with code %d\nstdout: %s\nstderr: %s", args, code, stdout, stderr)
 	}
-	return parseKeyValues(stdout)
+	return parseResult(stdout)
 }
 
 // parseDuration parses a time.Duration string from the CLI output.
@@ -99,42 +150,59 @@ func parseDuration(t *testing.T, s string) time.Duration {
 	return d
 }
 
-// assertTimingOrder verifies that TTDR <= RTT <= TTFB <= TTLB.
-func assertTimingOrder(t *testing.T, result map[string]string) {
+// assertTiming verifies the layered timing model shares a single anchor:
+// top-level TTDR <= RTT, and every layer's TTFB <= TTLB while remaining
+// monotonically non-decreasing down the stack (each layer's TTFB >= RTT and
+// >= the previous layer's TTLB). All values must be present and non-negative.
+func assertTiming(t *testing.T, result cliResult) {
 	t.Helper()
 
-	ttdr := parseDuration(t, result["TTDR"])
-	rtt := parseDuration(t, result["RTT"])
-	ttfb := parseDuration(t, result["TTFB"])
-	ttlb := parseDuration(t, result["TTLB"])
+	ttdr := parseDuration(t, result.top["TTDR"])
+	rtt := parseDuration(t, result.top["RTT"])
 
+	if ttdr < 0 {
+		t.Errorf("expected TTDR to be non-negative, got %v", ttdr)
+	}
+	if rtt < 0 {
+		t.Errorf("expected RTT to be non-negative, got %v", rtt)
+	}
 	if ttdr > rtt {
 		t.Errorf("TTDR (%v) should be <= RTT (%v)", ttdr, rtt)
 	}
-	if rtt > ttfb {
-		t.Errorf("RTT (%v) should be <= TTFB (%v)", rtt, ttfb)
-	}
-	if ttfb > ttlb {
-		t.Errorf("TTFB (%v) should be <= TTLB (%v)", ttfb, ttlb)
+
+	if len(result.layers) == 0 {
+		t.Fatal("expected at least one layer in output")
 	}
 
-	t.Logf("Timing: TTDR=%v RTT=%v TTFB=%v TTLB=%v", ttdr, rtt, ttfb, ttlb)
-}
-
-// assertTimingFields verifies all four timing fields are present and non-zero.
-func assertTimingFields(t *testing.T, result map[string]string) {
-	t.Helper()
-	for _, field := range []string{"TTDR", "RTT", "TTFB", "TTLB"} {
-		val, ok := result[field]
+	prev := rtt
+	for _, l := range result.layers {
+		ttfbStr, ok := l.fields["TTFB"]
 		if !ok {
-			t.Errorf("expected %s to be present in output", field)
+			t.Errorf("layer %q missing TTFB", l.name)
 			continue
 		}
-		d := parseDuration(t, val)
-		if d < 0 {
-			t.Errorf("expected %s to be non-negative, got %v", field, d)
+		ttlbStr, ok := l.fields["TTLB"]
+		if !ok {
+			t.Errorf("layer %q missing TTLB", l.name)
+			continue
 		}
+		ttfb := parseDuration(t, ttfbStr)
+		ttlb := parseDuration(t, ttlbStr)
+
+		if ttfb < 0 || ttlb < 0 {
+			t.Errorf("layer %q timings should be non-negative, got TTFB=%v TTLB=%v", l.name, ttfb, ttlb)
+		}
+		if ttfb > ttlb {
+			t.Errorf("layer %q: TTFB (%v) should be <= TTLB (%v)", l.name, ttfb, ttlb)
+		}
+		if ttfb < prev {
+			t.Errorf("layer %q: TTFB (%v) should be >= previous layer's end (%v)", l.name, ttfb, prev)
+		}
+		t.Logf("layer %q: TTFB=%v TTLB=%v", l.name, ttfb, ttlb)
+		prev = ttlb
 	}
+
+	t.Logf("Timing: TTDR=%v RTT=%v", ttdr, rtt)
 }
 
 // ---- TCP generic ----
@@ -144,20 +212,22 @@ func TestIntegrationTCP(t *testing.T) {
 		t.Skipf("PostgreSQL container not ready (used as TCP target): %v", err)
 	}
 
-	result := cliKV(t, "tcp", "localhost:15432")
+	result := cliRun(t, "tcp", "localhost:15432")
 
-	if result["Success"] != "true" {
-		t.Errorf("expected Success=true, got %v", result["Success"])
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
 	}
-	if result["Protocol"] != "tcp" {
-		t.Errorf("expected Protocol=tcp, got %v", result["Protocol"])
+	if result.top["Protocol"] != "tcp" {
+		t.Errorf("expected Protocol=tcp, got %v", result.top["Protocol"])
 	}
-	if result["Transport"] != "tcp" {
-		t.Errorf("expected Transport=tcp, got %v", result["Transport"])
+	if result.top["Transport"] != "tcp" {
+		t.Errorf("expected Transport=tcp, got %v", result.top["Transport"])
+	}
+	if _, ok := result.layer("tcp"); !ok {
+		t.Errorf("expected a [tcp] transport layer in output")
 	}
 
-	assertTimingFields(t, result)
-	assertTimingOrder(t, result)
+	assertTiming(t, result)
 }
 
 // ---- UDP generic ----
@@ -170,12 +240,14 @@ func TestIntegrationUDP(t *testing.T) {
 
 	// UDP may succeed or fail depending on network; just verify it doesn't panic
 	if code == 0 {
-		result := parseKeyValues(stdout)
-		if result["Protocol"] != "udp" {
-			t.Errorf("expected Protocol=udp, got %v", result["Protocol"])
+		result := parseResult(stdout)
+		if result.top["Protocol"] != "udp" {
+			t.Errorf("expected Protocol=udp, got %v", result.top["Protocol"])
 		}
-		assertTimingFields(t, result)
-		assertTimingOrder(t, result)
+		if _, ok := result.layer("udp"); !ok {
+			t.Errorf("expected a [udp] transport layer in output")
+		}
+		assertTiming(t, result)
 	}
 }
 
@@ -186,21 +258,20 @@ func TestIntegrationSSH(t *testing.T) {
 		t.Skipf("SSH container not ready: %v", err)
 	}
 
-	result := cliKV(t, "ssh", "localhost:2222")
+	result := cliRun(t, "ssh", "localhost:2222")
 
-	if result["Success"] != "true" {
-		t.Errorf("expected Success=true, got %v", result["Success"])
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
 	}
-	if result["Protocol"] != "ssh" {
-		t.Errorf("expected Protocol=ssh, got %v", result["Protocol"])
+	if result.top["Protocol"] != "ssh" {
+		t.Errorf("expected Protocol=ssh, got %v", result.top["Protocol"])
 	}
-	versionStr := result["Version String"]
+	versionStr, _ := result.data("Version String")
 	if !strings.HasPrefix(versionStr, "SSH-") {
 		t.Errorf("expected Version String to start with SSH-, got %q", versionStr)
 	}
 
-	assertTimingFields(t, result)
-	assertTimingOrder(t, result)
+	assertTiming(t, result)
 }
 
 // ---- PostgreSQL ----
@@ -210,21 +281,20 @@ func TestIntegrationPostgreSQL(t *testing.T) {
 		t.Skipf("PostgreSQL container not ready: %v", err)
 	}
 
-	result := cliKV(t, "postgresql", "localhost:15432")
+	result := cliRun(t, "postgresql", "localhost:15432")
 
-	if result["Success"] != "true" {
-		t.Errorf("expected Success=true, got %v", result["Success"])
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
 	}
-	if result["Protocol"] != "postgresql" {
-		t.Errorf("expected Protocol=postgresql, got %v", result["Protocol"])
+	if result.top["Protocol"] != "postgresql" {
+		t.Errorf("expected Protocol=postgresql, got %v", result.top["Protocol"])
 	}
 	// PostgreSQL alpine image does not enable SSL by default
-	if result["SSL Supported"] != "false" {
-		t.Errorf("expected SSL Supported=false, got %v", result["SSL Supported"])
+	if ssl, _ := result.data("SSL Supported"); ssl != "false" {
+		t.Errorf("expected SSL Supported=false, got %v", ssl)
 	}
 
-	assertTimingFields(t, result)
-	assertTimingOrder(t, result)
+	assertTiming(t, result)
 }
 
 func TestIntegrationPostgreSQLDisableSSL(t *testing.T) {
@@ -232,20 +302,19 @@ func TestIntegrationPostgreSQLDisableSSL(t *testing.T) {
 		t.Skipf("PostgreSQL container not ready: %v", err)
 	}
 
-	result := cliKV(t, "postgresql", "localhost:15432", "--sslmode=disable")
+	result := cliRun(t, "postgresql", "localhost:15432", "--sslmode=disable")
 
-	if result["Success"] != "true" {
-		t.Errorf("expected Success=true, got %v", result["Success"])
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
 	}
-	if result["Protocol"] != "postgresql" {
-		t.Errorf("expected Protocol=postgresql, got %v", result["Protocol"])
+	if result.top["Protocol"] != "postgresql" {
+		t.Errorf("expected Protocol=postgresql, got %v", result.top["Protocol"])
 	}
-	if result["SSL Supported"] != "false" {
-		t.Errorf("expected SSL Supported=false with --sslmode=disable, got %v", result["SSL Supported"])
+	if ssl, _ := result.data("SSL Supported"); ssl != "false" {
+		t.Errorf("expected SSL Supported=false with --sslmode=disable, got %v", ssl)
 	}
 
-	assertTimingFields(t, result)
-	assertTimingOrder(t, result)
+	assertTiming(t, result)
 }
 
 // ---- Minecraft ----
@@ -255,29 +324,28 @@ func TestIntegrationMinecraft(t *testing.T) {
 		t.Skipf("Minecraft container not ready: %v", err)
 	}
 
-	result := cliKV(t, "minecraft", "localhost:25565")
+	result := cliRun(t, "minecraft", "localhost:25565")
 
-	if result["Success"] != "true" {
-		t.Errorf("expected Success=true, got %v", result["Success"])
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
 	}
-	if result["Protocol"] != "minecraft" {
-		t.Errorf("expected Protocol=minecraft, got %v", result["Protocol"])
+	if result.top["Protocol"] != "minecraft" {
+		t.Errorf("expected Protocol=minecraft, got %v", result.top["Protocol"])
 	}
-	if result["Transport"] != "tcp" {
-		t.Errorf("expected Transport=tcp, got %v", result["Transport"])
+	if result.top["Transport"] != "tcp" {
+		t.Errorf("expected Transport=tcp, got %v", result.top["Transport"])
 	}
-	if _, ok := result["Version"]; !ok {
+	if _, ok := result.data("Version"); !ok {
 		t.Errorf("expected Version to be present")
 	}
-	if _, ok := result["MOTD"]; !ok {
+	if _, ok := result.data("MOTD"); !ok {
 		t.Errorf("expected MOTD to be present")
 	}
-	if _, ok := result["Players Max"]; !ok {
+	if _, ok := result.data("Players Max"); !ok {
 		t.Errorf("expected Players Max to be present")
 	}
 
-	assertTimingFields(t, result)
-	assertTimingOrder(t, result)
+	assertTiming(t, result)
 }
 
 // ---- CLI commands ----

@@ -47,8 +47,8 @@ func printTLSData(data *tls.TLSResult) {
 }
 
 func init() {
-	registerDataPrinter("tls", func(result *greet.GreetResult) {
-		if r, ok := result.Data.(*tls.TLSResult); ok {
+	registerLayerPrinter("tls", func(layer greet.LayerResult) {
+		if r, ok := layer.Data.(*tls.TLSResult); ok {
 			printTLSData(r)
 		}
 	})
