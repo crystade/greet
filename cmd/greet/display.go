@@ -21,6 +21,15 @@ func registerLayerPrinter(name string, fn layerDataPrinter) {
 	layerPrinters[name] = fn
 }
 
+// printResultAs writes the result in the requested output format.
+func printResultAs(result *greet.GreetResult, outputFormat string, codec *jsonapi.Codec) {
+	if outputFormat == "json" {
+		printResultJSON(result, codec)
+		return
+	}
+	printResult(result)
+}
+
 // printResult writes the aggregated result to stdout.
 // Transport-level metrics are printed first, then each app layer's timing and data.
 func printResult(result *greet.GreetResult) {
@@ -44,8 +53,8 @@ func printResult(result *greet.GreetResult) {
 // printResultJSON writes the result as indented JSON to stdout using the
 // jsonapi models. Protocol-specific payloads are mapped via the registered
 // jsonapi mappers (imported via jsonapi/all in main).
-func printResultJSON(result *greet.GreetResult) {
-	resp := jsonapi.FromGreetResult(result)
+func printResultJSON(result *greet.GreetResult, codec *jsonapi.Codec) {
+	resp := codec.FromGreetResult(result)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(resp); err != nil {

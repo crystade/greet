@@ -3,6 +3,7 @@
 package tls
 
 import (
+	"github.com/crystade/greet"
 	"github.com/crystade/greet/jsonapi"
 	"github.com/crystade/greet/protocols/tls"
 )
@@ -30,9 +31,8 @@ type CertChainEntry struct {
 	Status            []string `json:"status"`
 }
 
-// FromResult maps a *tls.TLSResult to *Data. It returns the input unchanged
-// when data is not a *tls.TLSResult.
-func FromResult(data any) any {
+// FromResult maps a tls.TLSResult to its JSON representation.
+func FromResult(data greet.LayerData) any {
 	r, ok := data.(*tls.TLSResult)
 	if !ok || r == nil {
 		return data
@@ -62,6 +62,7 @@ func FromResult(data any) any {
 	return out
 }
 
-func init() {
-	jsonapi.RegisterDataMapper(tls.ProtocolName, FromResult)
+// Register registers the TLS data mapper on the given Codec.
+func Register(c *jsonapi.Codec) {
+	c.RegisterDataMapper(tls.ProtocolName, FromResult)
 }

@@ -1,22 +1,32 @@
-// Package all blank-imports every protocol to trigger their init() registration.
-// Import this package to opt into all built-in protocols:
-//
-//	import _ "github.com/crystade/greet/protocols/all"
 package all
 
 import (
 	"github.com/crystade/greet"
-	_ "github.com/crystade/greet/protocols/http"
-	_ "github.com/crystade/greet/protocols/minecraft"
-	_ "github.com/crystade/greet/protocols/postgresql"
-	_ "github.com/crystade/greet/protocols/ssh"
-	_ "github.com/crystade/greet/protocols/tcp"
-	_ "github.com/crystade/greet/protocols/tls"
-	_ "github.com/crystade/greet/protocols/udp"
+	"github.com/crystade/greet/protocols/http"
+	"github.com/crystade/greet/protocols/minecraft"
+	"github.com/crystade/greet/protocols/postgresql"
+	"github.com/crystade/greet/protocols/ssh"
+	"github.com/crystade/greet/protocols/tcp"
+	"github.com/crystade/greet/protocols/tls"
+	"github.com/crystade/greet/protocols/udp"
 )
 
-func init() {
-	// Register composite stacks that span multiple layers here, after all
-	// individual layer init() calls have run (guaranteed by Go's init order).
-	greet.RegisterStack("https", []string{"tcp", "tls", "http"}, 443, "HTTPS request/response probe (TLS + HTTP)")
+// Register adds all built-in protocols to the given engine.
+func Register(e *greet.Engine) {
+	e.RegisterTransport(tcp.New())
+	e.RegisterTransport(udp.New())
+	e.RegisterApp(tls.New())
+	e.RegisterApp(ssh.New())
+	e.RegisterApp(http.New())
+	e.RegisterApp(minecraft.New())
+	e.RegisterApp(postgresql.New())
+	e.RegisterStack("https", []string{"tcp", "tls", "http"}, 443, "HTTPS request/response probe (TLS + HTTP)")
+}
+
+// NewEngine creates an Engine pre-loaded with all built-in protocols.
+// Convenience wrapper around NewEngine() + Register().
+func NewEngine() *greet.Engine {
+	e := greet.NewEngine()
+	Register(e)
+	return e
 }

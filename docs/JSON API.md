@@ -1,42 +1,30 @@
 # JSON API
 
-The `jsonapi` package provides JSON-serializable request and response models for the **greet** engine, together with mappers that convert to and from the domain models. The domain models themselves carry no JSON tags — all JSON shaping lives here so the wire format can evolve independently of the core engine.
+The `jsonapi` package provides JSON-serializable request and response models for the `greet` engine. It is the right choice when you want to expose `greet` over HTTP, accept probe requests via an API, or serialize results for storage or forwarding. The domain models in the core package carry no JSON tags — all JSON shaping lives here, so the wire format can evolve independently of the engine.
 
-## Package structure
+## Setup
 
-```
-jsonapi/
-  jsonapi.go          ← Request, Response, Layer types + mapper registry
-  all/
-    all.go            ← blank-imports every protocol subpackage to trigger init()
-  minecraft/
-    minecraft.go      ← Data, Options, FromResult, DecodeOptions
-  postgresql/
-    postgresql.go     ← Data, Options, FromResult, DecodeOptions
-  ssh/
-    ssh.go            ← Data, FromResult
-  tls/
-    tls.go            ← Data, CertChainEntry, FromResult
-```
-
-The root package `jsonapi` holds the core types and a registry of data mappers and option decoders. Each protocol subpackage registers its own mapper (and optionally an option decoder) via `init()`.
-
-Import `github.com/crystade/greet/jsonapi/all` as a side-effect import to opt into all built-in protocol mappers:
+Import `github.com/crystade/greet/jsonapi/all` to get a `Codec` with every built-in protocol registered:
 
 ```go
-import _ "github.com/crystade/greet/jsonapi/all"
+import (
+    japiall "github.com/crystade/greet/jsonapi/all"
+    protoall "github.com/crystade/greet/protocols/all"
+)
+
+engine := protoall.NewEngine()
+codec  := japiall.NewCodec()
 ```
 
 ## Request
 
-`Request` is the JSON-serializable input for a greet operation.
+`Request` is the JSON-deserializable input for a probe.
 
-| Field      | Type                          | JSON key      | Required | Description |
-|------------|-------------------------------|---------------|----------|-------------|
-| `Protocol` | `string`                      | `"protocol"`  | yes      | Registered protocol name, e.g. `"tls"`, `"minecraft"`, `"ssh"`, `"postgresql"`. |
-| `Target`   | `string`                      | `"target"`    | yes      | Host or `host:port` to probe. |
-| `TimeoutMs`| `int64`                       | `"timeoutMs"` | no       | Handshake timeout in milliseconds. Zero/negative means use the engine default (5 s). |
-| `Options`  | `map[string]json.RawMessage`  | `"options"`   | no       | Per-protocol options keyed by protocol name. Each value is decoded by the option decoder registered for that protocol. |
+| Field | JSON key | Required | Description |
+|-------|----------|----------|-------------|
+| `Protocol` | `"protocol"` | yes | Registered protocol name, e.g. `"tls"`, `"minecraft"`, `"ssh"`, `"postgresql"`. |
+| `Target` | `"target"` | yes | Host or `host:port` to probe. |
+| `Options` | `"options"` | no | Per-protocol options keyed by protocol name. |
 
 ### Minimal request
 
@@ -47,73 +35,42 @@ import _ "github.com/crystade/greet/jsonapi/all"
 }
 ```
 
-### Request with timeout
+### Request with options
 
 ```json
 {
   "protocol": "minecraft",
   "target": "mc.example.com:25565",
-  "timeoutMs": 3000
-}
-```
-
-### Request with protocol options
-
-```json
-{
-  "protocol": "minecraft",
-  "target": "mc.example.com:25565",
-  "timeoutMs": 3000,
   "options": {
     "minecraft": { "protocolVersion": 775 }
   }
 }
 ```
 
-### Method: `GreetOptions()`
-
-`Request` exposes a `GreetOptions()` method that converts the JSON request into engine `greet.GreetOption` values:
-
-```go
-func (r *Request) GreetOptions() ([]greet.GreetOption, error)
-```
-
-- If `TimeoutMs > 0`, a `greet.WithTimeout(...)` option is produced.
-- Each entry in `r.Options` is dispatched to the registered `OptionDecoder` for that protocol name.
-- An unknown protocol key in `Options` returns an error.
-
 ## Response
 
-`Response` is the JSON-serializable outcome of a greet operation.
+`Response` is the JSON-serializable result of a probe.
 
-| Field       | Type      | JSON key     | Description |
-|-------------|-----------|--------------|-------------|
-| `Protocol`  | `string`  | `"protocol"` | Name of the outermost application layer. |
-| `Transport` | `string`  | `"transport"`| Base transport used (`"tcp"` or `"udp"`). |
-| `TTDRMs`    | `float64` | `"ttdrMs"`   | Time to DNS resolution, in milliseconds. |
-| `RTTMs`     | `float64` | `"rttMs"`    | Time to establish the transport connection, in milliseconds. |
-| `Success`   | `bool`    | `"success"`  | `true` only when every layer in the stack succeeded. |
-| `Layers`    | `[]Layer` | `"layers"`   | Per-layer results in stack order. |
+| Field | JSON key | Type | Description |
+|-------|----------|------|-------------|
+| `Protocol` | `"protocol"` | string | Name of the outermost application layer. |
+| `Transport` | `"transport"` | string | Base transport used (`"tcp"` or `"udp"`). |
+| `TTDRMs` | `"ttdrMs"` | float64 | Time to DNS resolution, in milliseconds. |
+| `RTTMs` | `"rttMs"` | float64 | Time to establish the transport connection, in milliseconds. |
+| `Success` | `"success"` | bool | `true` only when every layer succeeded. |
+| `Layers` | `"layers"` | `[]Layer` | Per-layer results in stack order. |
 
 ### Layer
 
-| Field     | Type      | JSON key     | Description |
-|-----------|-----------|--------------|-------------|
-| `Name`    | `string`  | `"name"`     | Layer slug, e.g. `"tcp"`, `"tls"`, `"minecraft"`. |
-| `TTFBMs`  | `float64` | `"ttfbMs"`   | Time to first byte from the shared start anchor, in milliseconds. |
-| `TTLBMs`  | `float64` | `"ttlbMs"`   | Time to last byte from the shared start anchor, in milliseconds. |
-| `Success` | `bool`    | `"success"`  | Whether this layer completed without error. |
-| `Data`    | `any`     | `"data"`     | Protocol-specific payload. `null` for transport-only layers (`"tcp"`, `"udp"`). |
+| Field | JSON key | Type | Description |
+|-------|----------|------|-------------|
+| `Name` | `"name"` | string | Layer slug, e.g. `"tcp"`, `"tls"`, `"minecraft"`. |
+| `TTFBMs` | `"ttfbMs"` | float64 | Time to first byte from the shared start anchor, in milliseconds. |
+| `TTLBMs` | `"ttlbMs"` | float64 | Time to last byte from the shared start anchor, in milliseconds. |
+| `Success` | `"success"` | bool | Whether this layer completed without error. |
+| `Data` | `"data"` | any | Protocol-specific payload. `null` for transport-only layers (`"tcp"`, `"udp"`). |
 
-### Timing model
-
-```
-|------|                    TTDR: DNS resolved
-|------|--|                 RTT:  transport connection established
-        per-layer TTFB/TTLB tracked in Layers[i]
-```
-
-All timing values share the same start anchor.
+All timing values share the same start anchor — see [Timing model](./Core.md#timing-model) in Core.md.
 
 ### Example response (TLS)
 
@@ -160,129 +117,226 @@ All timing values share the same start anchor.
 }
 ```
 
-## Protocol-specific data types
+## Protocol data schemas
 
-Each protocol subpackage defines its own `Data` struct for the JSON payload within a `Layer.Data` field.
+Each protocol defines its own `data` payload within a layer.
 
-### TLS (`jsonapi/tls`)
+### TLS
 
-| Field          | JSON key              | Type               | Description |
-|----------------|-----------------------|--------------------|-------------|
-| `CertChain`    | `"certChain"`         | `[]CertChainEntry` | Ordered list of certificates. |
-| `Status`       | `"status"`            | `[]string`         | Per-certificate status strings. |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"certChain"` | `[]CertChainEntry` | Ordered certificate chain, leaf first. |
+| `"status"` | `[]string` | Overall chain status strings. |
 
 **CertChainEntry:**
 
-| Field              | JSON key              | Type       |
-|--------------------|-----------------------|------------|
-| `Subject`          | `"subject"`           | `string`   |
-| `Issuer`           | `"issuer"`            | `string`   |
-| `Serial`           | `"serial"`            | `string`   |
-| `NotBefore`        | `"notBefore"`         | `string`   |
-| `NotAfter`         | `"notAfter"`          | `string`   |
-| `Version`          | `"version"`           | `int`      |
-| `DNSNames`         | `"dnsNames"`          | `[]string` |
-| `IPAddresses`      | `"ipAddresses"`       | `[]string` |
-| `IsCA`             | `"isCa"`              | `bool`     |
-| `SignatureAlgo`    | `"signatureAlgo"`     | `string`   |
-| `PublicKeyAlgo`    | `"publicKeyAlgo"`     | `string`   |
-| `SHA256Fingerprint`| `"sha256Fingerprint"` | `string`   |
-| `Status`           | `"status"`            | `[]string` |
+| JSON key | Type |
+|----------|------|
+| `"subject"` | string |
+| `"issuer"` | string |
+| `"serial"` | string |
+| `"notBefore"` | string (RFC3339) |
+| `"notAfter"` | string (RFC3339) |
+| `"version"` | int |
+| `"dnsNames"` | `[]string` |
+| `"ipAddresses"` | `[]string` |
+| `"isCa"` | bool |
+| `"signatureAlgo"` | string |
+| `"publicKeyAlgo"` | string |
+| `"sha256Fingerprint"` | string |
+| `"status"` | `[]string` |
 
-### SSH (`jsonapi/ssh`)
+### SSH
 
-| Field           | JSON key           | Type     | Description |
-|-----------------|--------------------|----------|-------------|
-| `VersionString` | `"versionString"`  | `string` | SSH server version string, e.g. `"SSH-2.0-OpenSSH_9.6"`. |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"versionString"` | string | SSH server version string, e.g. `"SSH-2.0-OpenSSH_9.6"`. |
 
-### HTTP (`jsonapi/http`)
+### HTTP
 
-| Field             | JSON key          | Type            | Description |
-|-------------------|-------------------|-----------------|-------------|
-| `ProtocolVersion` | `"protocolVersion"`| `string`        | The HTTP version from the response status line. |
-| `StatusCode`      | `"statusCode"`    | `int`           | The numeric HTTP status code. |
-| `Status`          | `"status"`        | `string`        | The full status text. |
-| `ResponseHeaders` | `"responseHeaders"`| `[]Header`      | The response headers in the order received. |
-| `Redirects`       | `"redirects"`     | `[]RedirectHop` | The chain of redirects that were followed. |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"protocolVersion"` | string | HTTP version from the response status line. |
+| `"statusCode"` | int | Numeric HTTP status code. |
+| `"status"` | string | Full status text. |
+| `"responseHeaders"` | `[]Header` | Response headers in the order received. |
+| `"redirects"` | `[]RedirectHop` | Chain of redirects that were followed. |
 
-**Header:**
-
-| Field   | JSON key | Type     |
-|---------|----------|----------|
-| `Name`  | `"name"` | `string` |
-| `Value` | `"value"`| `string` |
+**Header:** `{ "name": string, "value": string }`
 
 **RedirectHop:**
 
-| Field             | JSON key          | Type       |
-|-------------------|-------------------|------------|
-| `URL`             | `"url"`           | `string`   |
-| `StatusCode`      | `"statusCode"`    | `int`      |
-| `Method`          | `"method"`        | `string`   |
-| `ResponseHeaders` | `"responseHeaders"`| `[]Header` |
+| JSON key | Type |
+|----------|------|
+| `"url"` | string |
+| `"statusCode"` | int |
+| `"method"` | string |
+| `"responseHeaders"` | `[]Header` |
 
-### Minecraft (`jsonapi/minecraft`)
+### Minecraft
 
-| Field        | JSON key        | Type     | Description |
-|--------------|-----------------|----------|-------------|
-| `Version`    | `"version"`     | `string` | Server version string. |
-| `MOTD`       | `"motd"`        | `string` | Message of the day. |
-| `Players`    | `"players"`     | `int`    | Current player count. |
-| `MaxPlayers` | `"maxPlayers"`  | `int`    | Maximum player count. |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"version"` | string | Server version string. |
+| `"motd"` | string | Message of the day. |
+| `"players"` | int | Current player count. |
+| `"maxPlayers"` | int | Maximum player count. |
 
-### PostgreSQL (`jsonapi/postgresql`)
+### PostgreSQL
 
-| Field          | JSON key          | Type   | Description |
-|----------------|-------------------|--------|-------------|
-| `SSLSupported` | `"sslSupported"`  | `bool` | Whether the server supports SSL/TLS. |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"sslSupported"` | bool | Whether the server supports SSL/TLS. |
 
 ## Protocol options
 
-Protocols can expose JSON-configurable options that are decoded into engine `GreetOption` values.
+Options are supplied in the `"options"` field of the request, keyed by protocol name.
 
 ### Minecraft options
 
-| Field              | JSON key            | Type  | Description |
-|--------------------|---------------------|-------|-------------|
-| `ProtocolVersion`  | `"protocolVersion"` | `int` | Minecraft protocol version number (e.g. 775 for 1.20.4). |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"protocolVersion"` | int | Minecraft protocol version (e.g. 775 for 1.20.4). |
 
 ### HTTP options
 
-| Field                  | JSON key               | Type       | Description |
-|------------------------|------------------------|------------|-------------|
-| `Target`               | `"target"`             | `string`   | Request path/target. |
-| `Method`               | `"method"`             | `string`   | HTTP method. |
-| `Headers`              | `"headers"`            | `[]Header` | Additional request headers to send. |
-| `MaxResponseBodyBytes` | `"maxResponseBodyBytes"`| `int64`    | Max bytes of response body to buffer. |
-| `MaxRedirectFollow`    | `"maxRedirectFollow"`  | `int`      | Max redirects to follow. |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"target"` | string | Request path/target. |
+| `"method"` | string | HTTP method. |
+| `"headers"` | `[]Header` | Additional request headers. |
+| `"maxResponseBodyBytes"` | int64 | Max bytes of response body to buffer. |
+| `"maxRedirectFollow"` | int | Max redirects to follow. |
 
 ### PostgreSQL options
 
-| Field     | JSON key    | Type     | Description |
-|-----------|-------------|----------|-------------|
-| `SSLMode` | `"sslMode"` | `string` | SSL mode (`"disable"`, `"allow"`, `"prefer"`, `"require"`). |
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"sslMode"` | string | SSL mode: `"prefer"` (default) or `"disable"`. |
 
-TLS and SSH protocols do not accept options.
+TLS and SSH do not accept options.
 
-## Converting domain results to JSON
+## Using the codec in Go
 
-Use `jsonapi.FromGreetResult` to map a domain `*greet.GreetResult` into a JSON-serializable `*Response`:
+### Decoding a request and running a probe
 
 ```go
-result, err := greet.Greet(ctx, "tls", "example.com:443", opts...)
-// handle err
-resp := jsonapi.FromGreetResult(result)
-jsonBytes, _ := json.Marshal(resp)
+var req jsonapi.Request
+if err := json.Unmarshal(raw, &req); err != nil {
+    return err
+}
+
+opts, err := req.GreetOptions(codec)
+if err != nil {
+    return err
+}
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+result, err := engine.Greet(ctx, req.Protocol, req.Target, opts...)
+if err != nil {
+    // result may be non-nil with partial layer data
+}
 ```
 
-- Returns `nil` when the input `*greet.GreetResult` is `nil`.
-- Each layer's `Data` is mapped through the registered `DataMapper` for that layer name.
-- Layers with no registered mapper (or `nil` data) pass through as-is.
-- Durations are converted to fractional milliseconds via `jsonapi.DurationToMs`.
+### Encoding a result to JSON
 
-## Integrating a new protocol
+```go
+resp := codec.FromGreetResult(result)
+out, _ := json.MarshalIndent(resp, "", "  ")
+fmt.Println(string(out))
+```
 
-To add JSON API support for a new protocol, create a subpackage under `jsonapi/` and register your types in `init()`.
+`codec.FromGreetResult` returns `nil` when the input is `nil`. Each layer's `data` is mapped through the registered mapper for that layer name; layers without a mapper pass through as-is. Durations are converted to fractional milliseconds.
+
+### End-to-end example
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "time"
+
+    "github.com/crystade/greet/jsonapi"
+    japiall "github.com/crystade/greet/jsonapi/all"
+    protoall "github.com/crystade/greet/protocols/all"
+)
+
+func main() {
+    engine := protoall.NewEngine()
+    codec  := japiall.NewCodec()
+
+    raw := []byte(`{
+        "protocol": "tls",
+        "target": "example.com:443"
+    }`)
+
+    var req jsonapi.Request
+    if err := json.Unmarshal(raw, &req); err != nil {
+        panic(err)
+    }
+
+    opts, err := req.GreetOptions(codec)
+    if err != nil {
+        panic(err)
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+
+    result, err := engine.Greet(ctx, req.Protocol, req.Target, opts...)
+    if err != nil {
+        panic(err)
+    }
+
+    resp := codec.FromGreetResult(result)
+    out, _ := json.MarshalIndent(resp, "", "  ")
+    fmt.Println(string(out))
+}
+```
+
+### Injecting runtime configuration
+
+Some protocol options cannot be serialized to JSON — for example, the HTTP layer's `BodyReader` (`io.Reader`) or `RedirectValidator` (a callback). When you decode a request with `req.GreetOptions(codec)`, it generates a `greet.WithLayerConfig` that replaces the entire layer config. To inject runtime objects into JSON-decoded config, append a custom option that mutates the decoded pointer:
+
+```go
+opts, err := req.GreetOptions(codec)
+if err != nil {
+    panic(err)
+}
+
+if _, hasHTTP := req.Options[greethttp.ProtocolName]; hasHTTP {
+    // Mutate the JSON-decoded config to add the runtime BodyReader
+    opts = append(opts, func(c *greet.GreetConfig) {
+        if raw := c.LayerConfig(greethttp.ProtocolName); raw != nil {
+            if cfg, ok := raw.(*greethttp.HTTPConfig); ok {
+                cfg.BodyReader = strings.NewReader(`{"login":"admin"}`)
+                cfg.RedirectValidator = myCustomValidator
+            }
+        }
+    })
+} else {
+    // No JSON options were provided — construct the config from scratch
+    opts = append(opts, greet.WithLayerConfig(greethttp.ProtocolName, &greethttp.HTTPConfig{
+        BodyReader:        strings.NewReader(`{"login":"admin"}`),
+        RedirectValidator: myCustomValidator,
+    }))
+}
+
+result, err := engine.Greet(ctx, req.Protocol, req.Target, opts...)
+```
+
+---
+
+## Extending the JSON API
+
+This section is for teams adding a custom protocol to their own `greet` service or fork who also want that protocol to be serializable via the JSON API.
+
+For each new protocol, create a subpackage under `jsonapi/` and implement two things: a **data mapper** that converts the domain result struct to a JSON-serializable struct, and (if your protocol accepts options) an **option decoder** that converts `json.RawMessage` into `[]greet.GreetOption`.
 
 ### Step 1: Define your JSON data model
 
@@ -304,7 +358,7 @@ type Data struct {
 ### Step 2: Implement FromResult
 
 ```go
-func FromResult(data any) any {
+func FromResult(data greet.LayerData) any {
     r, ok := data.(*myproto.MyProtoResult)
     if !ok || r == nil {
         return data
@@ -315,14 +369,7 @@ func FromResult(data any) any {
 
 ### Step 3 (optional): Implement DecodeOptions
 
-If your protocol accepts per-request options:
-
 ```go
-import (
-    "encoding/json"
-    "github.com/crystade/greet"
-)
-
 type Options struct {
     Qux string `json:"qux"`
 }
@@ -338,124 +385,33 @@ func DecodeOptions(raw json.RawMessage) ([]greet.GreetOption, error) {
 }
 ```
 
-### Step 4: Register in init()
+### Step 4: Register
 
 ```go
-func init() {
-    jsonapi.RegisterDataMapper(myproto.ProtocolName, FromResult)
-    jsonapi.RegisterOptionDecoder(myproto.ProtocolName, DecodeOptions)
+func Register(c *jsonapi.Codec) {
+    c.RegisterDataMapper(myproto.ProtocolName, FromResult)
+    c.RegisterOptionDecoder(myproto.ProtocolName, DecodeOptions)
 }
 ```
 
-### Step 5: Wire into `jsonapi/all`
+| Function | Description |
+|----------|-------------|
+| `c.RegisterDataMapper(name, fn)` | Maps a `greet.LayerData` to a JSON-serializable value. Panics on duplicate name. |
+| `c.RegisterOptionDecoder(name, fn)` | Decodes `json.RawMessage` options into `[]greet.GreetOption`. Panics on duplicate name. |
 
-Add your import to `jsonapi/all/all.go`:
+### Step 5: Wire into jsonapi/all
 
-```go
-import (
-    // ...existing imports...
-    _ "github.com/crystade/greet/jsonapi/myproto"
-)
-```
-
-### API reference for registration
-
-| Function                                        | Description |
-|-------------------------------------------------|-------------|
-| `jsonapi.RegisterDataMapper(name, DataMapper)`  | Register a `DataMapper` for a protocol layer. Panics on duplicate name (case-insensitive). |
-| `jsonapi.RegisterOptionDecoder(name, OptionDecoder)` | Register an `OptionDecoder` for a protocol. Panics on duplicate name (case-insensitive). |
-
-**DataMapper** signature:
-```go
-type DataMapper func(data any) any
-```
-
-**OptionDecoder** signature:
-```go
-type OptionDecoder func(raw json.RawMessage) ([]greet.GreetOption, error)
-```
-
-## End-to-end integration
+Add a call to your `Register` function inside `jsonapi/all/all.go`:
 
 ```go
-package main
-
-import (
-    "context"
-    "encoding/json"
-    "fmt"
-
-    "github.com/crystade/greet"
-    _ "github.com/crystade/greet/jsonapi/all"
-    "github.com/crystade/greet/jsonapi"
-    _ "github.com/crystade/greet/protocols/all"
-)
-
-func main() {
-    raw := []byte(`{
-        "protocol": "tls",
-        "target": "example.com:443"
-    }`)
-
-    var req jsonapi.Request
-    if err := json.Unmarshal(raw, &req); err != nil {
-        panic(err)
-    }
-
-    opts, err := req.GreetOptions()
-    if err != nil {
-        panic(err)
-    }
-
-    ctx, cancel := context.WithTimeout(context.Background(), greet.DefaultTimeout)
-    defer cancel()
-
-    result, err := greet.Greet(ctx, req.Protocol, req.Target, opts...)
-    if err != nil {
-        panic(err)
-    }
-
-    resp := jsonapi.FromGreetResult(result)
-    out, _ := json.MarshalIndent(resp, "", "  ")
-    fmt.Println(string(out))
+func Register(c *jsonapi.Codec) {
+    // ...existing registrations...
+    myproto.Register(c)
 }
 ```
 
-## Injecting runtime configuration
+---
 
-Some protocol configurations require runtime objects that cannot be serialized to JSON, such as the HTTP layer's `BodyReader` (`io.Reader`) or `RedirectValidator` (callback function).
-
-When using `req.GreetOptions()` to decode JSON options, it generates a `greet.WithLayerConfig` that completely overwrites any previous configuration for that layer. To inject runtime objects into a JSON-derived configuration, you must append a custom `GreetOption` that mutates the decoded pointer.
-
-```go
-opts, err := req.GreetOptions()
-if err != nil {
-    panic(err)
-}
-
-// Check if the JSON request included HTTP options
-if _, hasHTTP := req.Options[greethttp.ProtocolName]; hasHTTP {
-    // If yes, append a custom option to mutate the JSON-decoded config pointer
-    opts = append(opts, func(c *greet.GreetConfig) {
-        if raw := c.LayerConfig(greethttp.ProtocolName); raw != nil {
-            if cfg, ok := raw.(*greethttp.HTTPConfig); ok {
-                cfg.BodyReader = strings.NewReader(`{"login":"admin"}`)
-                cfg.RedirectValidator = myCustomValidator
-            }
-        }
-    })
-} else {
-    // If no JSON options were provided, use the standard option
-    opts = append(opts, greet.WithLayerConfig(greethttp.ProtocolName, &greethttp.HTTPConfig{
-        BodyReader: strings.NewReader(`{"login":"admin"}`),
-        RedirectValidator: myCustomValidator,
-    }))
-}
-
-// Run the greet operation with the merged options
-result, err := greet.Greet(ctx, req.Protocol, req.Target, opts...)
-```
-
-## Field naming convention
+## Field naming
 
 All JSON field names use **camelCase**. The domain models carry no JSON tags — the `jsonapi` package is the sole owner of the wire format.

@@ -23,7 +23,7 @@ type Options struct {
 
 // FromResult maps a *postgresql.PostgreSQLResult to *Data. It returns the input
 // unchanged when data is not a *postgresql.PostgreSQLResult.
-func FromResult(data any) any {
+func FromResult(data greet.LayerData) any {
 	r, ok := data.(*postgresql.PostgreSQLResult)
 	if !ok || r == nil {
 		return data
@@ -42,7 +42,8 @@ func DecodeOptions(raw json.RawMessage) ([]greet.GreetOption, error) {
 	}, nil
 }
 
-func init() {
-	jsonapi.RegisterDataMapper(postgresql.ProtocolName, FromResult)
-	jsonapi.RegisterOptionDecoder(postgresql.ProtocolName, DecodeOptions)
+// Register registers the PostgreSQL data mapper and option decoder on the given Codec.
+func Register(c *jsonapi.Codec) {
+	c.RegisterDataMapper(postgresql.ProtocolName, FromResult)
+	c.RegisterOptionDecoder(postgresql.ProtocolName, DecodeOptions)
 }

@@ -47,6 +47,8 @@ type MinecraftConfig struct {
 	ProtocolVersion int // e.g. 775 for 26.1
 }
 
+func (c *MinecraftConfig) LayerConfigName() string { return ProtocolName }
+
 // MinecraftResult holds the outcome of a Minecraft status query.
 type MinecraftResult struct {
 	Version    string
@@ -54,6 +56,8 @@ type MinecraftResult struct {
 	Players    int
 	MaxPlayers int
 }
+
+func (r *MinecraftResult) LayerDataName() string { return ProtocolName }
 
 // statusResponseJSON is the JSON structure returned by Minecraft servers.
 type statusResponseJSON struct {
@@ -71,6 +75,11 @@ type statusResponseJSON struct {
 // Minecraft implements a Minecraft Java Edition status probe.
 // It is stateless — all configuration is passed via GreetOption.
 type Minecraft struct{}
+
+// New creates a new Minecraft application layer.
+func New() *Minecraft {
+	return &Minecraft{}
+}
 
 func (m *Minecraft) Name() string                   { return ProtocolName }
 func (m *Minecraft) Description() string            { return "Minecraft Java Edition handshake + status request" }
@@ -93,7 +102,7 @@ func (m *Minecraft) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
 	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &MinecraftConfig{ProtocolVersion: ver})}, nil
 }
 
-func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
+func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 
 	// Resolve per-layer config
 	protoVersion := 775
@@ -349,8 +358,4 @@ func writeString(w io.Writer, s string) error {
 	}
 	_, err := w.Write([]byte(s))
 	return err
-}
-
-func init() {
-	greet.RegisterApp(&Minecraft{})
 }

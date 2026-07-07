@@ -26,7 +26,7 @@ type Options struct {
 
 // FromResult maps a *minecraft.MinecraftResult to *Data. It returns the input
 // unchanged when data is not a *minecraft.MinecraftResult.
-func FromResult(data any) any {
+func FromResult(data greet.LayerData) any {
 	r, ok := data.(*minecraft.MinecraftResult)
 	if !ok || r == nil {
 		return data
@@ -50,7 +50,8 @@ func DecodeOptions(raw json.RawMessage) ([]greet.GreetOption, error) {
 	}, nil
 }
 
-func init() {
-	jsonapi.RegisterDataMapper(minecraft.ProtocolName, FromResult)
-	jsonapi.RegisterOptionDecoder(minecraft.ProtocolName, DecodeOptions)
+// Register registers the Minecraft data mapper and option decoder on the given Codec.
+func Register(c *jsonapi.Codec) {
+	c.RegisterDataMapper(minecraft.ProtocolName, FromResult)
+	c.RegisterOptionDecoder(minecraft.ProtocolName, DecodeOptions)
 }

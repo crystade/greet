@@ -57,35 +57,24 @@ func TestGreetError(t *testing.T) {
 	}
 }
 
-func TestGreetOptionTimeout(t *testing.T) {
+func TestGreetOptionLayerTimeout(t *testing.T) {
 	customTimeout := 10 * time.Second
-	opt := greet.WithTimeout(customTimeout)
+	opt := greet.WithLayerTimeout("tls", customTimeout)
 
-	cfg := &greet.GreetConfig{}
-	opt(cfg)
+	cfg := greet.ResolveOptions(opt)
 
-	if cfg.Timeout != customTimeout {
-		t.Errorf("WithTimeout: got %v, want %v", cfg.Timeout, customTimeout)
+	if cfg.LayerTimeout("tls") != customTimeout {
+		t.Errorf("WithLayerTimeout: got %v, want %v", cfg.LayerTimeout("tls"), customTimeout)
 	}
-}
-
-func TestDefaultTimeout(t *testing.T) {
-	if greet.DefaultTimeout != 5*time.Second {
-		t.Errorf("DefaultTimeout = %v, want %v", greet.DefaultTimeout, 5*time.Second)
+	if cfg.LayerTimeout("tcp") != 0 {
+		t.Errorf("WithLayerTimeout: got %v, want 0", cfg.LayerTimeout("tcp"))
 	}
 }
 
 func TestResolveOptions(t *testing.T) {
 	// No options — should use defaults
 	cfg := greet.ResolveOptions()
-	if cfg.Timeout != greet.DefaultTimeout {
-		t.Errorf("ResolveOptions(): Timeout = %v, want %v", cfg.Timeout, greet.DefaultTimeout)
-	}
-
-	// Custom timeout
-	custom := 3 * time.Second
-	cfg = greet.ResolveOptions(greet.WithTimeout(custom))
-	if cfg.Timeout != custom {
-		t.Errorf("ResolveOptions(WithTimeout): Timeout = %v, want %v", cfg.Timeout, custom)
+	if cfg.LayerTimeout("tls") != 0 {
+		t.Errorf("ResolveOptions(): LayerTimeout = %v, want 0", cfg.LayerTimeout("tls"))
 	}
 }

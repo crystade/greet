@@ -53,8 +53,8 @@ func ResolveHost(ctx context.Context, host string) (*DNSResult, error) {
 //   - "minecraft"  → [tcp, minecraft]
 //   - "tcp"        → [tcp]
 //   - "udp"        → [udp]
-func Greet(ctx context.Context, protocol, target string, opts ...GreetOption) (*GreetResult, error) {
-	stack, err := Resolve(protocol)
+func (e *Engine) Greet(ctx context.Context, protocol, target string, opts ...GreetOption) (*GreetResult, error) {
+	stack, err := e.Resolve(protocol)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func Greet(ctx context.Context, protocol, target string, opts ...GreetOption) (*
 		return nil, err
 	}
 
-	return GreetStack(ctx, stack, host, port, opts...)
+	return e.GreetStack(ctx, stack, host, port, opts...), nil
 }
 
 // GreetStack executes an already-resolved Stack against host:port.
@@ -74,14 +74,12 @@ func Greet(ctx context.Context, protocol, target string, opts ...GreetOption) (*
 //  1. Dial the transport layer (DNS + TCP/UDP + RTT).
 //  2. For each app layer in order, run Handshake over the shared connection.
 //  3. On first error: mark that layer failed, abort remaining layers,
-//     return the partial GreetResult alongside the error.
+//     set result.Error, and return.
 //  4. Close the connection when done.
-func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts ...GreetOption) (*GreetResult, error) {
+func (e *Engine) GreetStack(ctx context.Context, stack *Stack, host string, port int, opts ...GreetOption) *GreetResult {
 	cfg := ResolveOptions(opts...)
 
-	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
+	// NO context.WithTimeout wrapping — caller controls global deadline
 	// start is the shared timing anchor for the whole stack. Every layer
 	// measures TTDR/RTT/TTFB/TTLB as time.Since(start) so the aggregated
 	// result illustrates the protocol stack from a single origin.
@@ -108,14 +106,15 @@ func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts .
 
 	if err != nil {
 		result.Success = false
-		return result, err
+		result.Error = err
+		return result
 	}
 	defer conn.Close()
 
 	// Bare transport (tcp/udp only) — no app layers to run.
 	if len(stack.Apps) == 0 {
 		result.Success = true
-		return result, nil
+		return result
 	}
 
 	// Step 2: run each app layer in order over the shared connection.
@@ -124,7 +123,17 @@ func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts .
 	// transport conn — layers must not close it themselves.
 	current := conn
 	for _, app := range stack.Apps {
-		next, data, timing, handshakeErr := app.Handshake(ctx, start, current, host, port, &cfg)
+		layerCtx := ctx
+		var cancel context.CancelFunc
+		if lt := cfg.LayerTimeout(app.Name()); lt > 0 {
+			layerCtx, cancel = context.WithTimeout(ctx, lt)
+		}
+
+		next, data, timing, handshakeErr := app.Handshake(layerCtx, start, current, host, port, &cfg)
+
+		if cancel != nil {
+			cancel()
+		}
 
 		lr := LayerResult{
 			Name:    app.Name(),
@@ -137,7 +146,8 @@ func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts .
 
 		if handshakeErr != nil {
 			result.Success = false
-			return result, handshakeErr
+			result.Error = handshakeErr
+			return result
 		}
 		if next != nil {
 			current = next
@@ -145,12 +155,12 @@ func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts .
 	}
 
 	result.Success = true
-	return result, nil
+	return result
 }
 
 // ListProtocols returns all registered protocol names (transports + app layers), sorted.
-func ListProtocols() []string {
-	all := ListAll()
+func (e *Engine) ListProtocols() []string {
+	all := e.ListAll()
 	names := make([]string, len(all))
 	for i, l := range all {
 		names[i] = l.Name

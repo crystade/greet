@@ -1,13 +1,26 @@
-// Package all blank-imports every jsonapi protocol subpackage to trigger their
-// init() registration. Import this package to opt into all built-in mappers:
-//
-//	import _ "github.com/crystade/greet/jsonapi/all"
 package all
 
 import (
-	_ "github.com/crystade/greet/jsonapi/http"
-	_ "github.com/crystade/greet/jsonapi/minecraft"
-	_ "github.com/crystade/greet/jsonapi/postgresql"
-	_ "github.com/crystade/greet/jsonapi/ssh"
-	_ "github.com/crystade/greet/jsonapi/tls"
+	"github.com/crystade/greet/jsonapi"
+	japiHTTP "github.com/crystade/greet/jsonapi/http"
+	japiMinecraft "github.com/crystade/greet/jsonapi/minecraft"
+	japiPostgresql "github.com/crystade/greet/jsonapi/postgresql"
+	japiSSH "github.com/crystade/greet/jsonapi/ssh"
+	japiTLS "github.com/crystade/greet/jsonapi/tls"
 )
+
+// Register adds all built-in protocol mappers/decoders to the given Codec.
+func Register(c *jsonapi.Codec) {
+	japiTLS.Register(c)
+	japiSSH.Register(c)
+	japiHTTP.Register(c)
+	japiMinecraft.Register(c)
+	japiPostgresql.Register(c)
+}
+
+// NewCodec creates a Codec pre-loaded with all built-in protocol mappers.
+func NewCodec() *jsonapi.Codec {
+	c := jsonapi.NewCodec()
+	Register(c)
+	return c
+}

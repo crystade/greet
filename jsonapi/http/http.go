@@ -45,8 +45,7 @@ type Options struct {
 }
 
 // FromResult maps a *greethttp.HTTPResult to *Data.
-// Returns the input unchanged when data is not a *greethttp.HTTPResult.
-func FromResult(data any) any {
+func FromResult(data greet.LayerData) any {
 	r, ok := data.(*greethttp.HTTPResult)
 	if !ok || r == nil {
 		return data
@@ -109,7 +108,8 @@ func DecodeOptions(raw json.RawMessage) ([]greet.GreetOption, error) {
 	}, nil
 }
 
-func init() {
-	jsonapi.RegisterDataMapper(greethttp.ProtocolName, FromResult)
-	jsonapi.RegisterOptionDecoder(greethttp.ProtocolName, DecodeOptions)
+// Register registers the HTTP data mapper and option decoder on the given Codec.
+func Register(c *jsonapi.Codec) {
+	c.RegisterDataMapper(greethttp.ProtocolName, FromResult)
+	c.RegisterOptionDecoder(greethttp.ProtocolName, DecodeOptions)
 }

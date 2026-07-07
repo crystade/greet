@@ -15,6 +15,11 @@ const ProtocolName = "tcp"
 // DefaultTCPPort is the fallback port for generic TCP probes.
 const DefaultTCPPort = 80
 
+// New creates a new TCP transport layer.
+func New() *TCP {
+	return &TCP{}
+}
+
 // TCP implements greet.TransportLayer for plain TCP connections.
 // It resolves DNS, dials, and returns the open conn together with TTDR and RTT.
 // It sends no application data.
@@ -45,6 +50,3 @@ func (t *TCP) Dial(ctx context.Context, start time.Time, host string, port int) 
 	return conn, ttdr, rtt, nil
 }
 
-func init() {
-	greet.RegisterTransport(&TCP{})
-}

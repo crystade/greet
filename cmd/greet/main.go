@@ -8,13 +8,16 @@ import (
 	"time"
 
 	"github.com/crystade/greet"
-	_ "github.com/crystade/greet/jsonapi/all"
-	_ "github.com/crystade/greet/protocols/all"
+	japiall "github.com/crystade/greet/jsonapi/all"
+	protoall "github.com/crystade/greet/protocols/all"
 )
 
 func main() {
+	engine := protoall.NewEngine()
+	codec := japiall.NewCodec()
+
 	if len(os.Args) < 2 {
-		printUsage()
+		printUsage(engine)
 		os.Exit(1)
 	}
 
@@ -22,13 +25,13 @@ func main() {
 
 	// Handle --help / -h before protocol lookup
 	if protoName == "--help" || protoName == "-h" {
-		printUsage()
+		printUsage(engine)
 		os.Exit(0)
 	}
 
 	// Handle "list" subcommand
 	if protoName == "list" {
-		printProtocols()
+		printProtocols(engine)
 		os.Exit(0)
 	}
 
@@ -42,18 +45,18 @@ func main() {
 	target := os.Args[2]
 
 	// Resolve the named protocol to its layer stack.
-	stack, err := greet.Resolve(protoName)
+	stack, err := engine.Resolve(protoName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: unknown protocol %q\n\n", protoName)
-		printProtocols()
+		printProtocols(engine)
 		os.Exit(1)
 	}
 
 	// Build a shared FlagSet. Each FlaggedLayer in the stack registers its flags here.
 	// Flag names are assumed collision-free across layers.
 	fs := flag.NewFlagSet(protoName, flag.ContinueOnError)
-	fs.Duration("timeout", greet.DefaultTimeout, "Handshake timeout (e.g. 5s, 1m)")
 	fs.String("output-format", "default", "Output format: default or json")
+	fs.Duration("timeout", 5*time.Second, "Global handshake timeout")
 
 	// Collect all FlaggedLayer instances (transport + app layers).
 	type flaggedEntry struct {
@@ -88,22 +91,21 @@ func main() {
 		opts = append(opts, extraOpts...)
 	}
 
-	// Read timeout from flag.
-	timeout := greet.DefaultTimeout
-	if f := fs.Lookup("timeout"); f != nil {
-		if getter, ok := f.Value.(flag.Getter); ok {
-			if v, ok := getter.Get().(time.Duration); ok {
-				timeout = v
-			}
-		}
-	}
-	opts = append(opts, greet.WithTimeout(timeout))
-
-	// Read output-format from flag and validate it.
+	// Read global flags
 	outputFormat := "default"
 	if f := fs.Lookup("output-format"); f != nil {
 		outputFormat = f.Value.String()
 	}
+	timeout := 5 * time.Second
+	if f := fs.Lookup("timeout"); f != nil {
+		if parsed, err := time.ParseDuration(f.Value.String()); err == nil {
+			timeout = parsed
+		}
+	}
+
+	// The CLI wraps the context with a timeout for usability.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	switch outputFormat {
 	case "default", "json":
 		// valid
@@ -119,42 +121,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
-
-	result, err := greet.GreetStack(ctx, stack, host, port, opts...)
-	if err != nil {
-		// Print any partial results first, then the error.
-		if result != nil && len(result.Layers) > 0 {
-			printResultAs(result, outputFormat)
-			fmt.Fprintln(os.Stderr)
-		}
-		printError(err)
+	result := engine.GreetStack(ctx, stack, host, port, opts...)
+	printResultAs(result, outputFormat, codec)
+	if !result.Success {
+		// Print error
+		printError(result.Error)
 		os.Exit(1)
 	}
-
-	printResultAs(result, outputFormat)
 }
 
-// printResultAs writes the result in the requested output format.
-func printResultAs(result *greet.GreetResult, outputFormat string) {
-	if outputFormat == "json" {
-		printResultJSON(result)
-		return
-	}
-	printResult(result)
-}
-
-func printUsage() {
+func printUsage(engine *greet.Engine) {
 	fmt.Fprintf(os.Stderr, "greet — pluggable protocol greeter\n\n")
 	fmt.Fprintf(os.Stderr, "Usage:\n")
 	fmt.Fprintf(os.Stderr, "  greet <protocol> <host>[:<port>] [flags]\n\n")
 	fmt.Fprintf(os.Stderr, "Flags:\n")
-	fmt.Fprintf(os.Stderr, "  --timeout duration       Handshake timeout (default 5s)\n")
 	fmt.Fprintf(os.Stderr, "  --output-format string   Output format: default or json (default \"default\")\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  greet list              List all registered protocols\n")
 	fmt.Fprintf(os.Stderr, "  greet --help            Show this help\n\n")
-	printProtocols()
+	if engine != nil {
+		printProtocols(engine)
+	}
 }
 
 func printUsageFor(protoName string) {
@@ -162,8 +149,8 @@ func printUsageFor(protoName string) {
 	fmt.Fprintf(os.Stderr, "  greet %s <host>[:<port>] [flags]\n", protoName)
 }
 
-func printProtocols() {
-	layers := greet.ListAll()
+func printProtocols(engine *greet.Engine) {
+	layers := engine.ListAll()
 	if len(layers) == 0 {
 		fmt.Fprintf(os.Stderr, "No protocols registered.\n")
 		return

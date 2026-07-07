@@ -27,34 +27,41 @@ const DefaultTLSPort = 443
 
 // CertChainEntry holds the details of a single certificate in the chain.
 type CertChainEntry struct {
-	Subject           string   `json:"subject"`
-	Issuer            string   `json:"issuer"`
-	Serial            string   `json:"serial"`
-	NotBefore         string   `json:"not_before"`
-	NotAfter          string   `json:"not_after"`
-	Version           int      `json:"version"`
-	DNSNames          []string `json:"dns_names,omitempty"`
-	IPAddresses       []string `json:"ip_addresses,omitempty"`
-	IsCA              bool     `json:"is_ca"`
-	SignatureAlgo     string   `json:"signature_algo"`
-	PublicKeyAlgo     string   `json:"public_key_algo"`
-	SHA256Fingerprint string   `json:"sha256_fingerprint"`
+	Subject           string
+	Issuer            string
+	Serial            string
+	NotBefore         string
+	NotAfter          string
+	Version           int
+	DNSNames          []string
+	IPAddresses       []string
+	IsCA              bool
+	SignatureAlgo     string
+	PublicKeyAlgo     string
+	SHA256Fingerprint string
 
 	// Status holds Chrome-style CERT_ checks for this individual certificate.
 	// ref: https://github.com/chromium/chromium/blob/main/net/cert/cert_status_flags.cc
-	Status []string `json:"status"`
+	Status []string
 }
 
 // TLSResult holds the full certificate chain and the concluded chain status from a TLS handshake.
 type TLSResult struct {
 	// CertChain contains all presented certificates sorted from leaf to root.
 	// The leaf certificate is always CertChain[0].
-	CertChain []CertChainEntry `json:"cert_chain"`
+	CertChain []CertChainEntry
 
 	// Status is the final concluded chain status. It holds the statuses from
 	// the first certificate (walking leaf→root) that has a non-OK check, or
 	// ["OK"] if every certificate in the chain passes all checks.
-	Status []string `json:"status"`
+	Status []string
+}
+
+func (r *TLSResult) LayerDataName() string { return ProtocolName }
+
+// New creates a new TLS application layer.
+func New() *TLS {
+	return &TLS{}
 }
 
 // TLS implements a TLS connectivity and certificate probe as an AppLayer.
@@ -70,7 +77,7 @@ func (t *TLS) BaseTransport() greet.Transport { return greet.TransportTCP }
 // Handshake upgrades conn to TLS, performs the handshake, and returns the
 // certificate chain with Chrome-style status checks. It returns the *tls.Conn
 // so subsequent layers (e.g. http) can read/write over the encrypted channel.
-func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
+func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 
 	tlsConn := cryptotls.Client(conn, &cryptotls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // intentional: we report cert status, not enforce it
@@ -241,8 +248,4 @@ func hasLocalNetworkNames(cert *x509.Certificate) bool {
 		}
 	}
 	return false
-}
-
-func init() {
-	greet.RegisterApp(&TLS{})
 }

@@ -22,7 +22,12 @@ type LayerResult struct {
 
 	// Data holds the protocol-specific payload for this layer (e.g. *tls.TLSResult).
 	// Nil for transport-only layers (tcp, udp).
-	Data any
+	Data LayerData
+}
+
+// LayerData is the interface that all protocol-specific result types must implement.
+type LayerData interface {
+	LayerDataName() string
 }
 
 // GreetResult holds the aggregated outcome of a layered protocol stack execution.
@@ -53,6 +58,11 @@ type GreetResult struct {
 	// base transport (tcp/udp) with TTFB = TTLB = RTT, followed by each
 	// application layer in execution order.
 	Layers []LayerResult
+
+	// Error is the error from the failing layer, if any.
+	// When Success is false and Error is non-nil, the Layers slice contains
+	// partial results up to and including the failed layer.
+	Error error
 }
 
 // Layer returns the LayerResult for the named layer, and whether it was found.

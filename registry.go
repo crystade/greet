@@ -49,54 +49,62 @@ type stackEntry struct {
 	description string
 }
 
-var (
+// Engine is an isolated greet instance with its own protocol registry.
+// Create one via NewEngine() and register protocols with RegisterTransport(),
+// RegisterApp(), and RegisterStack().
+type Engine struct {
 	mu                sync.RWMutex
-	transportRegistry = map[string]TransportLayer{}
-	appRegistry       = map[string]AppLayer{}
-	compositeRegistry = map[string]stackEntry{}
-)
-
-// RegisterTransport adds a TransportLayer to the global registry.
-// Call this from init() in each transport package (tcp, udp).
-func RegisterTransport(t TransportLayer) {
-	mu.Lock()
-	defer mu.Unlock()
-	name := strings.ToLower(t.Name())
-	if _, dup := transportRegistry[name]; dup {
-		panic(fmt.Sprintf("greet: transport %q already registered", name))
-	}
-	transportRegistry[name] = t
+	transportRegistry map[string]TransportLayer
+	appRegistry       map[string]AppLayer
+	compositeRegistry map[string]stackEntry
 }
 
-// RegisterApp adds an AppLayer to the global registry.
-// Call this from init() in each application protocol package.
-func RegisterApp(a AppLayer) {
-	mu.Lock()
-	defer mu.Unlock()
+// NewEngine creates a new empty Engine.
+func NewEngine() *Engine {
+	return &Engine{
+		transportRegistry: make(map[string]TransportLayer),
+		appRegistry:       make(map[string]AppLayer),
+		compositeRegistry: make(map[string]stackEntry),
+	}
+}
+
+// RegisterTransport adds a TransportLayer to the engine's registry.
+func (e *Engine) RegisterTransport(t TransportLayer) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	name := strings.ToLower(t.Name())
+	if _, dup := e.transportRegistry[name]; dup {
+		panic(fmt.Sprintf("greet: transport %q already registered", name))
+	}
+	e.transportRegistry[name] = t
+}
+
+// RegisterApp adds an AppLayer to the engine's registry.
+func (e *Engine) RegisterApp(a AppLayer) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	name := strings.ToLower(a.Name())
-	if _, dup := appRegistry[name]; dup {
+	if _, dup := e.appRegistry[name]; dup {
 		panic(fmt.Sprintf("greet: app layer %q already registered", name))
 	}
-	appRegistry[name] = a
+	e.appRegistry[name] = a
 }
 
 // RegisterStack registers a pre-built composite stack under a given name.
 // layers must be an ordered slice starting with a transport name followed by
 // app-layer names (e.g. ["tcp", "tls", "http"]). defaultPort overrides the
 // outermost layer's default port (pass 0 to use the outermost layer's port).
-// Call this from init() in a protocol package — all referenced layers must
-// already be registered before RegisterStack is called.
-func RegisterStack(name string, layers []string, defaultPort int, description string) {
-	mu.Lock()
-	defer mu.Unlock()
+func (e *Engine) RegisterStack(name string, layers []string, defaultPort int, description string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	key := strings.ToLower(name)
-	if _, dup := compositeRegistry[key]; dup {
+	if _, dup := e.compositeRegistry[key]; dup {
 		panic(fmt.Sprintf("greet: composite stack %q already registered", key))
 	}
-	if _, dup := appRegistry[key]; dup {
+	if _, dup := e.appRegistry[key]; dup {
 		panic(fmt.Sprintf("greet: composite stack %q conflicts with app layer", key))
 	}
-	if _, dup := transportRegistry[key]; dup {
+	if _, dup := e.transportRegistry[key]; dup {
 		panic(fmt.Sprintf("greet: composite stack %q conflicts with transport", key))
 	}
 
@@ -104,20 +112,20 @@ func RegisterStack(name string, layers []string, defaultPort int, description st
 		panic(fmt.Sprintf("greet: composite stack %q has empty layer list", key))
 	}
 	transportName := strings.ToLower(layers[0])
-	t, ok := transportRegistry[transportName]
+	t, ok := e.transportRegistry[transportName]
 	if !ok {
 		panic(fmt.Sprintf("greet: composite stack %q: transport %q not registered", key, layers[0]))
 	}
 	apps := make([]AppLayer, 0, len(layers)-1)
 	for _, n := range layers[1:] {
-		a, ok := appRegistry[strings.ToLower(n)]
+		a, ok := e.appRegistry[strings.ToLower(n)]
 		if !ok {
 			panic(fmt.Sprintf("greet: composite stack %q: app layer %q not registered", key, n))
 		}
 		apps = append(apps, a)
 	}
 	stack := &Stack{Transport: t, Apps: apps}
-	compositeRegistry[key] = stackEntry{stack: stack, defaultPort: defaultPort, description: description}
+	e.compositeRegistry[key] = stackEntry{stack: stack, defaultPort: defaultPort, description: description}
 }
 
 // Resolve returns the execution Stack for the given protocol name.
@@ -125,13 +133,13 @@ func RegisterStack(name string, layers []string, defaultPort int, description st
 // If name matches an app layer (e.g. "tls", "minecraft"), the stack is
 // [required transport] + [app layer].
 // If name matches a composite stack (e.g. "https"), the pre-built stack is returned.
-func Resolve(name string) (*Stack, error) {
-	mu.RLock()
-	defer mu.RUnlock()
+func (e *Engine) Resolve(name string) (*Stack, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	key := strings.ToLower(name)
 
 	// Check composite registry first (e.g. "https" = tcp+tls+http)
-	if entry, ok := compositeRegistry[key]; ok {
+	if entry, ok := e.compositeRegistry[key]; ok {
 		s := *entry.stack // shallow copy so callers can't mutate the registry copy
 		s.overrideName = key
 		if entry.defaultPort > 0 {
@@ -141,14 +149,14 @@ func Resolve(name string) (*Stack, error) {
 	}
 
 	// Check transport registry first (tcp, udp are standalone stacks)
-	if t, ok := transportRegistry[key]; ok {
+	if t, ok := e.transportRegistry[key]; ok {
 		return &Stack{Transport: t}, nil
 	}
 
 	// Check app layer registry
-	if a, ok := appRegistry[key]; ok {
+	if a, ok := e.appRegistry[key]; ok {
 		base := strings.ToLower(string(a.BaseTransport()))
-		t, ok := transportRegistry[base]
+		t, ok := e.transportRegistry[base]
 		if !ok {
 			return nil, &GreetError{
 				Code:    ErrUnknownProtocol,
@@ -167,18 +175,18 @@ func Resolve(name string) (*Stack, error) {
 // ResolveStack builds a Stack from an explicit ordered list of layer names.
 // The first name must be a transport; subsequent names must be app layers
 // compatible with that transport.
-func ResolveStack(names []string) (*Stack, error) {
+func (e *Engine) ResolveStack(names []string) (*Stack, error) {
 	if len(names) == 0 {
 		return nil, &GreetError{
 			Code:    ErrUnknownProtocol,
 			Message: "layer list is empty",
 		}
 	}
-	mu.RLock()
-	defer mu.RUnlock()
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 
 	transportName := strings.ToLower(names[0])
-	t, ok := transportRegistry[transportName]
+	t, ok := e.transportRegistry[transportName]
 	if !ok {
 		return nil, &GreetError{
 			Code:    ErrUnknownProtocol,
@@ -189,7 +197,7 @@ func ResolveStack(names []string) (*Stack, error) {
 	apps := make([]AppLayer, 0, len(names)-1)
 	for _, n := range names[1:] {
 		key := strings.ToLower(n)
-		a, ok := appRegistry[key]
+		a, ok := e.appRegistry[key]
 		if !ok {
 			return nil, &GreetError{
 				Code:    ErrUnknownProtocol,
@@ -207,9 +215,7 @@ func ResolveStack(names []string) (*Stack, error) {
 	return &Stack{Transport: t, Apps: apps}, nil
 }
 
-// ListAll returns every registered transport and app layer as a flat list of
-// (name, description, defaultPort, transport) tuples, sorted by name.
-// Used by the CLI "list" subcommand.
+// LayerInfo describes a registered layer.
 type LayerInfo struct {
 	Name        string
 	Description string
@@ -217,11 +223,13 @@ type LayerInfo struct {
 	Transport   Transport
 }
 
-func ListAll() []LayerInfo {
-	mu.RLock()
-	defer mu.RUnlock()
+// ListAll returns every registered transport and app layer as a flat list of
+// (name, description, defaultPort, transport) tuples, sorted by name.
+func (e *Engine) ListAll() []LayerInfo {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
 	var out []LayerInfo
-	for _, t := range transportRegistry {
+	for _, t := range e.transportRegistry {
 		out = append(out, LayerInfo{
 			Name:        t.Name(),
 			Description: fmt.Sprintf("%s transport", t.Transport()),
@@ -229,7 +237,7 @@ func ListAll() []LayerInfo {
 			Transport:   t.Transport(),
 		})
 	}
-	for _, a := range appRegistry {
+	for _, a := range e.appRegistry {
 		out = append(out, LayerInfo{
 			Name:        a.Name(),
 			Description: a.Description(),
@@ -237,7 +245,7 @@ func ListAll() []LayerInfo {
 			Transport:   a.BaseTransport(),
 		})
 	}
-	for name, entry := range compositeRegistry {
+	for name, entry := range e.compositeRegistry {
 		port := entry.defaultPort
 		if port == 0 {
 			port = entry.stack.DefaultPort()

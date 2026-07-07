@@ -6,7 +6,7 @@
 // Structure mirrors the protocols/ tree: this root package holds the core
 // Request/Response types plus a mapper registry, and each protocol has its own
 // subpackage (jsonapi/tls, jsonapi/ssh, ...) that registers its data mapper and
-// option decoder via init(). Import jsonapi/all to opt into every protocol.
+// option decoder via Register(c *Codec). Import jsonapi/all to opt into every protocol.
 //
 // All JSON field names use camelCase.
 package jsonapi
@@ -28,10 +28,6 @@ type Request struct {
 
 	// Target is the host or host:port to probe.
 	Target string `json:"target"`
-
-	// TimeoutMs overrides the default handshake timeout, in milliseconds.
-	// Zero or negative means use the engine default.
-	TimeoutMs int64 `json:"timeoutMs,omitempty"`
 
 	// Options holds per-protocol options keyed by protocol name. Each value is
 	// decoded by the option decoder registered for that protocol.
@@ -80,44 +76,51 @@ type Layer struct {
 
 // DataMapper converts a protocol-specific domain payload (as stored in
 // greet.LayerResult.Data) into its JSON-serializable form.
-type DataMapper func(data any) any
+type DataMapper func(data greet.LayerData) any
 
 // OptionDecoder decodes a protocol's raw JSON options into engine GreetOptions.
 type OptionDecoder func(raw json.RawMessage) ([]greet.GreetOption, error)
 
-var (
+// Codec holds data mappers and option decoders for JSON serialization.
+type Codec struct {
 	mu             sync.RWMutex
-	dataMappers    = map[string]DataMapper{}
-	optionDecoders = map[string]OptionDecoder{}
-)
+	dataMappers    map[string]DataMapper
+	optionDecoders map[string]OptionDecoder
+}
+
+// NewCodec creates a new empty Codec.
+func NewCodec() *Codec {
+	return &Codec{
+		dataMappers:    make(map[string]DataMapper),
+		optionDecoders: make(map[string]OptionDecoder),
+	}
+}
 
 // RegisterDataMapper registers a DataMapper for the named protocol layer.
-// Call this from init() in each jsonapi protocol subpackage.
-func RegisterDataMapper(name string, m DataMapper) {
-	mu.Lock()
-	defer mu.Unlock()
+func (c *Codec) RegisterDataMapper(name string, m DataMapper) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	key := strings.ToLower(name)
-	if _, dup := dataMappers[key]; dup {
+	if _, dup := c.dataMappers[key]; dup {
 		panic(fmt.Sprintf("jsonapi: data mapper %q already registered", key))
 	}
-	dataMappers[key] = m
+	c.dataMappers[key] = m
 }
 
 // RegisterOptionDecoder registers an OptionDecoder for the named protocol.
-// Call this from init() in each jsonapi protocol subpackage that has options.
-func RegisterOptionDecoder(name string, d OptionDecoder) {
-	mu.Lock()
-	defer mu.Unlock()
+func (c *Codec) RegisterOptionDecoder(name string, d OptionDecoder) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	key := strings.ToLower(name)
-	if _, dup := optionDecoders[key]; dup {
+	if _, dup := c.optionDecoders[key]; dup {
 		panic(fmt.Sprintf("jsonapi: option decoder %q already registered", key))
 	}
-	optionDecoders[key] = d
+	c.optionDecoders[key] = d
 }
 
 // FromGreetResult maps a domain *greet.GreetResult to a JSON-serializable
 // *Response. It returns nil when result is nil.
-func FromGreetResult(result *greet.GreetResult) *Response {
+func (c *Codec) FromGreetResult(result *greet.GreetResult) *Response {
 	if result == nil {
 		return nil
 	}
@@ -138,7 +141,7 @@ func FromGreetResult(result *greet.GreetResult) *Response {
 				TTFBMs:  DurationToMs(l.TTFB),
 				TTLBMs:  DurationToMs(l.TTLB),
 				Success: l.Success,
-				Data:    mapLayerData(l.Name, l.Data),
+				Data:    c.mapLayerData(l.Name, l.Data),
 			}
 		}
 	}
@@ -148,33 +151,29 @@ func FromGreetResult(result *greet.GreetResult) *Response {
 
 // mapLayerData looks up the registered DataMapper for the layer and applies it.
 // Layers with no registered mapper (or nil data) pass their data through as-is.
-func mapLayerData(name string, data any) any {
+func (c *Codec) mapLayerData(name string, data greet.LayerData) any {
 	if data == nil {
 		return nil
 	}
-	mu.RLock()
-	m, ok := dataMappers[strings.ToLower(name)]
-	mu.RUnlock()
+	c.mu.RLock()
+	m, ok := c.dataMappers[strings.ToLower(name)]
+	c.mu.RUnlock()
 	if !ok {
 		return data
 	}
 	return m(data)
 }
 
-// GreetOptions builds engine GreetOptions from the request. It applies the
-// timeout and dispatches each per-protocol option blob to its registered
-// decoder. An unknown protocol key in Options is an error.
-func (r *Request) GreetOptions() ([]greet.GreetOption, error) {
+// GreetOptions builds engine GreetOptions from the request.
+// It dispatches each per-protocol option blob to its registered decoder.
+// An unknown protocol key in Options is an error.
+func (r *Request) GreetOptions(c *Codec) ([]greet.GreetOption, error) {
 	var opts []greet.GreetOption
 
-	if r.TimeoutMs > 0 {
-		opts = append(opts, greet.WithTimeout(time.Duration(r.TimeoutMs)*time.Millisecond))
-	}
-
 	for name, raw := range r.Options {
-		mu.RLock()
-		d, ok := optionDecoders[strings.ToLower(name)]
-		mu.RUnlock()
+		c.mu.RLock()
+		d, ok := c.optionDecoders[strings.ToLower(name)]
+		c.mu.RUnlock()
 		if !ok {
 			return nil, fmt.Errorf("jsonapi: no option decoder registered for %q", name)
 		}

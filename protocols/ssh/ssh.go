@@ -24,6 +24,13 @@ type SSHResult struct {
 	VersionString string // e.g. "SSH-2.0-OpenSSH_8.9"
 }
 
+func (r *SSHResult) LayerDataName() string { return ProtocolName }
+
+// New creates a new SSH application layer.
+func New() *SSH {
+	return &SSH{}
+}
+
 // SSH implements an SSH version banner probe.
 // It connects, reads the server's version string, and closes without
 // sending its own banner (anonymous probe).
@@ -36,7 +43,7 @@ func (s *SSH) BaseTransport() greet.Transport { return greet.TransportTCP }
 
 // Handshake reads the SSH version banner over an already-dialed conn.
 // start is the shared timing anchor from the transport dial.
-func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
+func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// Set read deadline from context
@@ -80,8 +87,4 @@ func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, hos
 	ttlb := time.Since(start) // TTLB = banner fully read
 
 	return conn, &SSHResult{VersionString: banner}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
-}
-
-func init() {
-	greet.RegisterApp(&SSH{})
 }

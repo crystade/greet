@@ -3,6 +3,7 @@
 package ssh
 
 import (
+	"github.com/crystade/greet"
 	"github.com/crystade/greet/jsonapi"
 	"github.com/crystade/greet/protocols/ssh"
 )
@@ -14,7 +15,7 @@ type Data struct {
 
 // FromResult maps a *ssh.SSHResult to *Data. It returns the input unchanged
 // when data is not a *ssh.SSHResult.
-func FromResult(data any) any {
+func FromResult(data greet.LayerData) any {
 	r, ok := data.(*ssh.SSHResult)
 	if !ok || r == nil {
 		return data
@@ -22,6 +23,7 @@ func FromResult(data any) any {
 	return &Data{VersionString: r.VersionString}
 }
 
-func init() {
-	jsonapi.RegisterDataMapper(ssh.ProtocolName, FromResult)
+// Register registers the SSH data mapper on the given Codec.
+func Register(c *jsonapi.Codec) {
+	c.RegisterDataMapper(ssh.ProtocolName, FromResult)
 }

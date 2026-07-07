@@ -61,7 +61,7 @@ type AppLayer interface {
 	// protocol-specific data, timing anchored from the shared start, and any error.
 	// The caller (engine) owns closing the original transport conn; layers that
 	// upgrade conn (e.g. TLS) must not close it — the engine's defer handles it.
-	Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *GreetConfig) (next net.Conn, data any, timing LayerTiming, err error)
+	Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *GreetConfig) (next net.Conn, data LayerData, timing LayerTiming, err error)
 }
 
 // FlaggedLayer is an optional interface for layers that need CLI-specific flags.

@@ -1,6 +1,6 @@
 # CLI
 
-The `greet` CLI is a pluggable protocol greeter — it probes remote servers across layered protocol stacks and reports per-layer timing and data. It supports both human-readable and JSON output, and auto-discovers protocol-specific flags from registered layers.
+The `greet` CLI probes remote servers across layered protocol stacks and reports per-layer timing and data. It supports human-readable and JSON output, and auto-discovers protocol-specific flags from registered layers.
 
 ## Installation
 
@@ -15,23 +15,38 @@ cd cmd/greet
 go build -o greet .
 ```
 
-## Basic usage
+## Quick start
+
+```bash
+# Check if a TLS server is reachable and inspect its certificate
+greet tls example.com
+
+# Check an SSH server on a non-standard port
+greet ssh 10.0.0.5:2222
+
+# Check if a Minecraft server is online
+greet minecraft mc.hypixel.net
+```
+
+## Usage
 
 ```
 greet <protocol> <host>[:<port>] [flags]
 ```
 
-The protocol name is required and must be one of the registered protocols. The target is `host` or `host:port` — if the port is omitted, the protocol's default is used.
+The protocol name must be one of the registered protocols (see [Supported protocols](./Core.md#supported-protocols) in Core.md). The target is `host` or `host:port`. When no port is given, the protocol's default is used.
+
+Flags must appear **after** the protocol and target:
 
 ```bash
-# Probe a TLS server on port 443 (default)
-greet tls example.com
+# Correct
+greet minecraft mc.example.com --protocol-version 766 --timeout 3s
 
-# Probe an SSH server on a custom port
-greet ssh 10.0.0.5:2222
+# Also correct — flags can be interspersed after the target
+greet tls example.com:8443 --output-format json --timeout 10s
 
-# Check if a Minecraft server is online
-greet minecraft mc.hypixel.net
+# Wrong — flags before the target will be misinterpreted
+greet tls --timeout 3s example.com   ❌
 ```
 
 ### IPv6
@@ -43,58 +58,48 @@ greet tcp [::1]:8080
 greet tls [2606:4700:4700::1111]:443
 ```
 
-## Supported protocols
+## Flags
 
-| Name          | Default port | Description |
-|---------------|-------------|-------------|
-| `tcp`         | 80          | Plain TCP connectivity check. |
-| `udp`         | 53          | UDP probe — sends an empty datagram and waits for a response. |
-| `tls`         | 443         | TLS handshake + certificate chain inspection. |
-| `http`        | 80          | HTTP request/response probe. |
-| `ssh`         | 22          | Reads the server's SSH version banner. |
-| `minecraft`   | 25565       | Minecraft Java Edition handshake + status request. |
-| `postgresql`  | 5432        | PostgreSQL `SSLRequest` probe. |
+### Global flags
 
-## Global flags
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--timeout` | duration | `5s` | Total operation timeout, including DNS. Accepts `3s`, `1m`, `500ms`, etc. |
+| `--output-format` | string | `"default"` | Output format: `"default"` (human-readable) or `"json"`. |
 
-| Flag                | Type     | Default     | Description |
-|---------------------|----------|-------------|-------------|
-| `--timeout`         | duration | `5s`        | Handshake timeout (e.g. `3s`, `1m`, `500ms`). |
-| `--output-format`   | string   | `"default"` | Output format: `"default"` (human-readable) or `"json"`. |
+### Protocol-specific flags
 
-## Protocol-specific flags
+Protocol layers can register their own flags, which the CLI discovers automatically. Only flags for layers in the resolved stack are available.
 
-Protocol layers can register their own flags. These are automatically discovered by the CLI. Only flags for layers in the resolved stack are available.
+#### HTTP
 
-### HTTP
-
-| Flag              | Type   | Default | Description |
-|-------------------|--------|---------|-------------|
-| `--method`        | string | `"GET"` | HTTP method (e.g. GET, POST, HEAD). |
-| `--path`          | string | `"/"`   | Request path and optional query (e.g. `/users?sort=name`). |
-| `--max-body`      | int    | 1 MiB   | Maximum response body bytes to buffer. |
-| `--max-redirects` | int    | `0`     | Maximum number of redirects to follow (0 = none). |
-| `--header`        | string |         | Request header in `Name:Value` form; may be repeated. |
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--method` | string | `"GET"` | HTTP method (e.g. GET, POST, HEAD). |
+| `--path` | string | `"/"` | Request path and optional query (e.g. `/users?sort=name`). |
+| `--max-body` | int | 1 MiB | Maximum response body bytes to buffer. |
+| `--max-redirects` | int | `0` | Maximum redirects to follow (0 = none). |
+| `--header` | string | | Request header in `Name:Value` form; may be repeated. |
 
 ```bash
 greet http example.com --method POST --path /login --max-redirects 3 --header "Content-Type:application/json"
 ```
 
-### Minecraft
+#### Minecraft
 
-| Flag                  | Type  | Default | Description |
-|-----------------------|-------|---------|-------------|
-| `--protocol-version`  | int   | `775`   | Minecraft protocol version (e.g. `775` for 1.20.4, `766` for 1.20.2). |
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--protocol-version` | int | `775` | Minecraft protocol version (e.g. `775` for 1.20.4, `766` for 1.20.2). |
 
 ```bash
 greet minecraft mc.example.com --protocol-version 766
 ```
 
-### PostgreSQL
+#### PostgreSQL
 
-| Flag          | Type   | Default    | Description |
-|---------------|--------|------------|-------------|
-| `--sslmode`   | string | `"prefer"` | SSL mode: `"prefer"` (try SSL) or `"disable"` (skip SSL). |
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--sslmode` | string | `"prefer"` | SSL mode: `"prefer"` (try SSL) or `"disable"` (skip SSL probe). |
 
 ```bash
 greet postgresql db.example.com --sslmode disable
@@ -114,7 +119,7 @@ Output:
 Available protocols:
   http           :80    HTTP request/response probe
   minecraft      :25565 Minecraft Java Edition handshake + status request
-  postgresql     :5432  PostgreSQL startup packet exchange
+  postgresql     :5432  PostgreSQL SSLRequest probe
   ssh            :22    SSH version banner exchange
   tcp            :80    Raw TCP connectivity probe
   tls            :443   TLS certificate check
@@ -128,11 +133,13 @@ greet --help
 greet -h
 ```
 
-## Output formats
+## Output
 
-### Default (human-readable)
+### Human-readable (default)
 
 Shows protocol-level metrics followed by each layer's timing and protocol-specific data.
+
+**TLS:**
 
 ```bash
 $ greet tls example.com
@@ -186,7 +193,7 @@ Success:   true
         ...
 ```
 
-### HTTP example
+**HTTP:**
 
 ```bash
 $ greet http example.com --max-redirects 1
@@ -213,7 +220,7 @@ Success:   true
   Status Code: 200
 ```
 
-### SSH example
+**SSH:**
 
 ```bash
 $ greet ssh github.com
@@ -238,7 +245,7 @@ Success:   true
   Version String: SSH-2.0-babeld-77e6c0e7
 ```
 
-### Minecraft example
+**Minecraft:**
 
 ```bash
 $ greet minecraft mc.hypixel.net
@@ -266,7 +273,7 @@ Success:   true
   Players Max: 200000
 ```
 
-### PostgreSQL example
+**PostgreSQL:**
 
 ```bash
 $ greet postgresql db.example.com
@@ -293,7 +300,7 @@ Success:   true
 
 ### JSON output
 
-Use `--output-format json` to get machine-readable JSON using the `jsonapi` models:
+Use `--output-format json` for machine-readable output. The schema is fully described in [JSON API.md](./JSON%20API.md).
 
 ```bash
 greet tls example.com --output-format json
@@ -342,11 +349,9 @@ greet tls example.com --output-format json
 }
 ```
 
-The JSON schema is fully described in [JSON API.md](./JSON%20API.md).
+## Errors
 
-## Error output
-
-When a probe fails, the CLI prints the error to stderr and exits with code 1. If partial results are available (e.g. TCP succeeded but TLS failed), they are printed first.
+When a probe fails, the CLI prints the error to stderr and exits with code 1. If partial results are available (e.g. TCP succeeded but TLS failed), they are printed before the error.
 
 ```bash
 $ greet tls 10.0.0.99:443
@@ -367,27 +372,12 @@ Protocol: tcp
 
 | Code | Meaning |
 |------|---------|
-| `0`  | All layers succeeded. |
-| `1`  | Probe failed (connection error, handshake error, unknown protocol, invalid arguments). |
-
-## Using flags
-
-Flags must appear after the protocol and target:
-
-```bash
-# Correct — flags after target
-greet minecraft mc.example.com --protocol-version 766 --timeout 3s
-
-# Also correct — flags can be interspersed
-greet tls example.com:8443 --output-format json --timeout 10s
-
-# Wrong — flags before target will be misinterpreted
-greet tls --timeout 3s example.com   ❌
-```
+| `0` | All layers succeeded. |
+| `1` | Probe failed (connection error, handshake error, unknown protocol, invalid arguments). |
 
 ## Scripting
 
-The JSON output format is designed for pipelines:
+The JSON output is designed for pipelines:
 
 ```bash
 # Check if TLS is valid for a domain
@@ -410,7 +400,7 @@ done
 
 ## Timeout behavior
 
-The `--timeout` flag sets the deadline for the entire handshake operation, including DNS resolution. The default is 5 seconds.
+`--timeout` sets the deadline for the entire operation including DNS resolution. The default is 5 seconds.
 
 ```bash
 # Aggressive 1-second timeout for local network checks
@@ -420,4 +410,4 @@ greet tcp 192.168.1.50:3000 --timeout 1s
 greet tls overseas.example.com --timeout 30s
 ```
 
-The timeout applies to the whole operation, not per-layer. If the combined DNS + TCP dial + TLS handshake takes longer than the timeout, the operation fails with a `deadline_exceeded` or `connection_timeout` error.
+The timeout covers DNS + TCP dial + all layer handshakes combined. If the total exceeds the limit, the operation fails with a `deadline_exceeded` or `connection_timeout` error.

@@ -20,8 +20,8 @@ const DefaultMaxRedirectFollow = 0
 // Header is a single HTTP header name/value pair. HTTP header names are
 // case-insensitive and may be duplicated; an ordered slice preserves both.
 type Header struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name  string
+	Value string
 }
 
 // HTTPConfig holds per-layer configuration for the HTTP layer.
@@ -55,6 +55,8 @@ type HTTPConfig struct {
 	// targets, never on the original user-specified target.
 	RedirectValidator func(locationURL string) error
 }
+
+func (c *HTTPConfig) LayerConfigName() string { return ProtocolName }
 
 // RedirectEntry records a single redirect hop that was followed.
 type RedirectEntry struct {
@@ -95,6 +97,8 @@ type HTTPResult struct {
 	// not 3xx, or MaxRedirectFollow was 0).
 	Redirects []RedirectEntry
 }
+
+func (r *HTTPResult) LayerDataName() string { return ProtocolName }
 
 // DefaultRedirectValidator validates that a redirect Location URL is
 // parseable and uses an http or https scheme. It does not perform DNS

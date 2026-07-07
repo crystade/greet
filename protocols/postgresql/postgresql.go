@@ -32,14 +32,23 @@ type PostgreSQLConfig struct {
 	SSLMode string // "prefer" (default) or "disable"
 }
 
+func (c *PostgreSQLConfig) LayerConfigName() string { return ProtocolName }
+
 // PostgreSQLResult holds the outcome of a PostgreSQL SSL probe.
 type PostgreSQLResult struct {
 	SSLSupported bool
 }
 
+func (r *PostgreSQLResult) LayerDataName() string { return ProtocolName }
+
 // PostgreSQL implements a PostgreSQL SSLRequest probe.
 // It is stateless — all configuration is passed via GreetOption.
 type PostgreSQL struct{}
+
+// New creates a new PostgreSQL application layer.
+func New() *PostgreSQL {
+	return &PostgreSQL{}
+}
 
 func (p *PostgreSQL) Name() string                   { return ProtocolName }
 func (p *PostgreSQL) Description() string            { return "PostgreSQL startup packet exchange" }
@@ -61,7 +70,7 @@ func (p *PostgreSQL) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
 	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &PostgreSQLConfig{SSLMode: sslMode})}, nil
 }
 
-func (p *PostgreSQL) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
+func (p *PostgreSQL) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 
 	// Resolve per-layer config
 	sslMode := "prefer"
@@ -151,8 +160,4 @@ func (p *PostgreSQL) Handshake(ctx context.Context, start time.Time, conn net.Co
 			Protocol: ProtocolName,
 		}
 	}
-}
-
-func init() {
-	greet.RegisterApp(&PostgreSQL{})
 }

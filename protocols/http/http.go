@@ -27,6 +27,11 @@ const ProtocolName = "http"
 // the response status, headers, and a bounded slice of the body.
 type HTTP struct{}
 
+// New creates a new HTTP application layer.
+func New() *HTTP {
+	return &HTTP{}
+}
+
 func (h *HTTP) Name() string                   { return ProtocolName }
 func (h *HTTP) Description() string            { return "HTTP request/response probe" }
 func (h *HTTP) DefaultPort() int               { return DefaultHTTPPort }
@@ -85,7 +90,7 @@ func (h *HTTP) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
 // The upgraded conn (same as input — HTTP does not wrap the connection) is
 // returned so subsequent layers (if any) could reuse it; in practice HTTP is
 // always the outermost layer.
-func (h *HTTP) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
+func (h *HTTP) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 	// --- resolve config ---
 	httpCfg := &HTTPConfig{}
 	if raw := cfg.LayerConfig(ProtocolName); raw != nil {
@@ -434,8 +439,4 @@ func portFromURL(u *url.URL, secure bool) int {
 func isSecureConn(conn net.Conn) bool {
 	_, ok := conn.(*tls.Conn)
 	return ok
-}
-
-func init() {
-	greet.RegisterApp(&HTTP{})
 }

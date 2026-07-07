@@ -17,6 +17,11 @@ const ProtocolName = "udp"
 // DefaultUDPPort is the well-known port for generic UDP probes.
 const DefaultUDPPort = 53
 
+// New creates a new UDP transport layer.
+func New() *UDP {
+	return &UDP{}
+}
+
 // UDP implements greet.TransportLayer for UDP probes.
 // Because UDP is connectionless, Dial sends an empty datagram and waits for
 // any response to capture RTT. The returned conn is the live UDPConn; since
@@ -87,8 +92,4 @@ func (u *UDP) Dial(ctx context.Context, start time.Time, host string, port int) 
 	}
 
 	return conn, ttdr, rtt, nil
-}
-
-func init() {
-	greet.RegisterTransport(&UDP{})
 }
