@@ -371,6 +371,71 @@ func TestIntegrationCLIUnknownProtocol(t *testing.T) {
 	}
 }
 
+// ---- HTTPS / HTTP ----
+
+// httpsCase describes a single HTTPS method test against reqbin.com.
+type httpsCase struct {
+	method string
+	path   string
+}
+
+func TestIntegrationHTTPS(t *testing.T) {
+	cases := []httpsCase{
+		{"GET", "/get"},
+		{"POST", "/post"},
+		{"PUT", "/put"},
+		{"PATCH", "/patch"},
+		{"DELETE", "/delete"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.method, func(t *testing.T) {
+			result := cliRun(t, "https", "testserver.host",
+				"--method", tc.method,
+				"--path", tc.path,
+			)
+
+			if result.top["Success"] != "true" {
+				t.Errorf("%s %s: expected Success=true, got %v", tc.method, tc.path, result.top["Success"])
+			}
+			if result.top["Protocol"] != "https" {
+				t.Errorf("%s %s: expected Protocol=https, got %v", tc.method, tc.path, result.top["Protocol"])
+			}
+			if result.top["Transport"] != "tcp" {
+				t.Errorf("%s %s: expected Transport=tcp, got %v", tc.method, tc.path, result.top["Transport"])
+			}
+
+			// Must have tcp, tls, and http layers
+			if _, ok := result.layer("tcp"); !ok {
+				t.Errorf("%s %s: expected [tcp] layer", tc.method, tc.path)
+			}
+			if _, ok := result.layer("tls"); !ok {
+				t.Errorf("%s %s: expected [tls] layer", tc.method, tc.path)
+			}
+			httpLayer, ok := result.layer("http")
+			if !ok {
+				t.Fatalf("%s %s: expected [http] layer", tc.method, tc.path)
+			}
+
+			// HTTP layer must report a 200-range status
+			status, ok := httpLayer.fields["Status"]
+			if !ok {
+				t.Errorf("%s %s: [http] layer missing Status field", tc.method, tc.path)
+			} else if !strings.HasPrefix(status, "200") {
+				t.Errorf("%s %s: expected HTTP 200, got %q", tc.method, tc.path, status)
+			}
+
+			// Protocol version must be present
+			if protoVer, ok := httpLayer.fields["Protocol Version"]; !ok || protoVer == "" {
+				t.Errorf("%s %s: [http] layer missing or empty Protocol Version", tc.method, tc.path)
+			}
+
+			assertTiming(t, result)
+		})
+	}
+}
+
 // waitForPort retries a TCP connection until it succeeds or times out.
 func waitForPort(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

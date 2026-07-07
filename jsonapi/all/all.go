@@ -5,6 +5,7 @@
 package all
 
 import (
+	_ "github.com/crystade/greet/jsonapi/http"
 	_ "github.com/crystade/greet/jsonapi/minecraft"
 	_ "github.com/crystade/greet/jsonapi/postgresql"
 	_ "github.com/crystade/greet/jsonapi/ssh"

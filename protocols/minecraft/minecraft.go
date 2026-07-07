@@ -93,14 +93,14 @@ func (m *Minecraft) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
 	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &MinecraftConfig{ProtocolVersion: ver})}, nil
 }
 
-func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
+func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
 
 	// Resolve per-layer config
 	protoVersion := 775
 	if raw := cfg.LayerConfig(ProtocolName); raw != nil {
 		mcCfg, ok := raw.(*MinecraftConfig)
 		if !ok {
-			return nil, greet.LayerTiming{}, &greet.GreetError{
+			return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 				Code:     greet.ErrInvalidConfig,
 				Message:  fmt.Sprintf("invalid layer config: expected *MinecraftConfig, got %T", raw),
 				Protocol: ProtocolName,
@@ -117,18 +117,18 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 
 	// Send Handshake packet
 	if err := sendHandshake(conn, host, port, protoVersion); err != nil {
-		return nil, greet.LayerTiming{}, err
+		return conn, nil, greet.LayerTiming{}, err
 	}
 
 	// Send Status Request packet
 	if err := sendStatusRequest(conn); err != nil {
-		return nil, greet.LayerTiming{}, err
+		return conn, nil, greet.LayerTiming{}, err
 	}
 
 	// Phase 3: Read raw Status Response bytes from network
 	// Read packet length
 	if _, err := readVarInt(br); err != nil {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read response packet length",
 			Protocol: ProtocolName,
@@ -140,7 +140,7 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 	// Read packet ID
 	packetID, err := readVarInt(br)
 	if err != nil {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read response packet ID",
 			Protocol: ProtocolName,
@@ -148,7 +148,7 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 		}
 	}
 	if packetID != 0x00 {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  fmt.Sprintf("unexpected packet ID: 0x%02x (expected 0x00)", packetID),
 			Protocol: ProtocolName,
@@ -158,7 +158,7 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 	// Read JSON string length
 	jsonLen, err := readVarInt(br)
 	if err != nil {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read JSON string length",
 			Protocol: ProtocolName,
@@ -166,7 +166,7 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 		}
 	}
 	if jsonLen <= 0 || jsonLen > 32768 {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  fmt.Sprintf("invalid JSON string length: %d", jsonLen),
 			Protocol: ProtocolName,
@@ -176,7 +176,7 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 	// Read JSON string
 	jsonBytes := make([]byte, jsonLen)
 	if _, err = io.ReadFull(br, jsonBytes); err != nil {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return conn, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrMinecraftMalformedResponse,
 			Message:  "failed to read JSON response body",
 			Protocol: ProtocolName,
@@ -188,10 +188,10 @@ func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Con
 	result, err := parseStatusResponse(jsonBytes)
 	ttlb := time.Since(start) // TTLB = JSON fully parsed
 	if err != nil {
-		return nil, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, err
+		return conn, nil, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, err
 	}
 
-	return result, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
+	return conn, result, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 }
 
 // sendHandshake builds and sends the Handshake packet.

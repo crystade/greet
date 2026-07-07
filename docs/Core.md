@@ -41,6 +41,7 @@ func main() {
 | `tcp`         | TCP only               | 80          | Plain TCP connectivity check (dial and hang up). |
 | `udp`         | UDP only               | 53          | UDP probe — sends an empty datagram and waits for any response. |
 | `tls`         | TCP → TLS              | 443         | TLS handshake + full certificate chain inspection with Chrome-style `CERT_` status checks. |
+| `http`        | TCP → (TLS) → HTTP     | 80          | HTTP request/response probe. Follows same-origin redirects and buffers body. |
 | `ssh`         | TCP → SSH              | 22          | Reads the server's SSH version banner (anonymous — no client banner sent). |
 | `minecraft`   | TCP → Minecraft        | 25565       | Minecraft Java Edition handshake + status request (version, MOTD, player count). |
 | `postgresql`  | TCP → PostgreSQL       | 5432        | PostgreSQL `SSLRequest` probe — detects whether the server supports SSL. |
@@ -125,6 +126,7 @@ Each protocol provides a typed result:
 | Protocol     | Data type                     | Key fields |
 |-------------|-------------------------------|------------|
 | `tls`       | `*tls.TLSResult`              | `CertChain []CertChainEntry`, `Status []string` |
+| `http`      | `*http.HTTPResult`            | `StatusCode`, `Status`, `ResponseHeaders`, `Redirects` |
 | `ssh`       | `*ssh.SSHResult`              | `VersionString string` |
 | `minecraft` | `*minecraft.MinecraftResult`  | `Version`, `MOTD`, `Players`, `MaxPlayers` |
 | `postgresql`| `*postgresql.PostgreSQLResult`| `SSLSupported bool` |
@@ -176,6 +178,7 @@ Each layer retrieves its config inside `Handshake` via `cfg.LayerConfig(name)` a
 |-------------|-----------------------------------|--------|
 | `minecraft` | `*minecraft.MinecraftConfig`      | `ProtocolVersion int` (default 775) |
 | `postgresql`| `*postgresql.PostgreSQLConfig`    | `SSLMode string` (`"prefer"` or `"disable"`) |
+| `http`      | `*http.HTTPConfig`                | `Target`, `Method`, `Headers`, `MaxResponseBodyBytes`, `MaxRedirectFollow` |
 
 ## Error handling
 
@@ -228,6 +231,17 @@ if errors.As(err, &ge) {
 | `send_failed`        | Datagram could not be sent. |
 | `receive_timeout`    | No response received within the timeout. |
 | `port_unreachable`   | ICMP port unreachable. |
+
+**HTTP errors:**
+
+| Code                         | Meaning |
+|------------------------------|---------|
+| `http_request_failed`        | Invalid target or request build failure. |
+| `http_response_failed`       | Response or body read/parse failure. |
+| `http_timeout`               | Read or write timeout during HTTP exchange. |
+| `http_redirect_ssrf`         | SSRF validator rejection. |
+| `http_too_many_redirects`    | Redirect limit exceeded. |
+| `http_redirect_cross_origin` | Cross-origin/cross-scheme redirect blocked. |
 
 ### Partial results on error
 

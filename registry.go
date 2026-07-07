@@ -10,13 +10,19 @@ import (
 // Stack is the resolved execution plan for a named protocol: the transport
 // layer to dial, followed by zero or more application layers to run in order.
 type Stack struct {
-	Transport TransportLayer
-	Apps      []AppLayer
+	Transport    TransportLayer
+	Apps         []AppLayer
+	overrideName string // set by composite stacks (e.g. "https")
+	overridePort int    // set by composite stacks to override outermost layer's port
 }
 
 // Name returns the name of the outermost (last) layer in the stack.
 // For a bare transport (e.g. "tcp") this is the transport name.
+// Composite stacks (e.g. "https") override this with their registered name.
 func (s *Stack) Name() string {
+	if s.overrideName != "" {
+		return s.overrideName
+	}
 	if len(s.Apps) > 0 {
 		return s.Apps[len(s.Apps)-1].Name()
 	}
@@ -24,17 +30,30 @@ func (s *Stack) Name() string {
 }
 
 // DefaultPort returns the default port of the outermost layer.
+// Composite stacks may override this (e.g. "https" uses 443 even though
+// the outermost "http" layer defaults to 80).
 func (s *Stack) DefaultPort() int {
+	if s.overridePort > 0 {
+		return s.overridePort
+	}
 	if len(s.Apps) > 0 {
 		return s.Apps[len(s.Apps)-1].DefaultPort()
 	}
 	return s.Transport.DefaultPort()
 }
 
+// stackEntry is a pre-built composite stack registered by name (e.g. "https").
+type stackEntry struct {
+	stack       *Stack
+	defaultPort int
+	description string
+}
+
 var (
 	mu                sync.RWMutex
 	transportRegistry = map[string]TransportLayer{}
 	appRegistry       = map[string]AppLayer{}
+	compositeRegistry = map[string]stackEntry{}
 )
 
 // RegisterTransport adds a TransportLayer to the global registry.
@@ -61,14 +80,65 @@ func RegisterApp(a AppLayer) {
 	appRegistry[name] = a
 }
 
+// RegisterStack registers a pre-built composite stack under a given name.
+// layers must be an ordered slice starting with a transport name followed by
+// app-layer names (e.g. ["tcp", "tls", "http"]). defaultPort overrides the
+// outermost layer's default port (pass 0 to use the outermost layer's port).
+// Call this from init() in a protocol package — all referenced layers must
+// already be registered before RegisterStack is called.
+func RegisterStack(name string, layers []string, defaultPort int, description string) {
+	mu.Lock()
+	defer mu.Unlock()
+	key := strings.ToLower(name)
+	if _, dup := compositeRegistry[key]; dup {
+		panic(fmt.Sprintf("greet: composite stack %q already registered", key))
+	}
+	if _, dup := appRegistry[key]; dup {
+		panic(fmt.Sprintf("greet: composite stack %q conflicts with app layer", key))
+	}
+	if _, dup := transportRegistry[key]; dup {
+		panic(fmt.Sprintf("greet: composite stack %q conflicts with transport", key))
+	}
+
+	if len(layers) == 0 {
+		panic(fmt.Sprintf("greet: composite stack %q has empty layer list", key))
+	}
+	transportName := strings.ToLower(layers[0])
+	t, ok := transportRegistry[transportName]
+	if !ok {
+		panic(fmt.Sprintf("greet: composite stack %q: transport %q not registered", key, layers[0]))
+	}
+	apps := make([]AppLayer, 0, len(layers)-1)
+	for _, n := range layers[1:] {
+		a, ok := appRegistry[strings.ToLower(n)]
+		if !ok {
+			panic(fmt.Sprintf("greet: composite stack %q: app layer %q not registered", key, n))
+		}
+		apps = append(apps, a)
+	}
+	stack := &Stack{Transport: t, Apps: apps}
+	compositeRegistry[key] = stackEntry{stack: stack, defaultPort: defaultPort, description: description}
+}
+
 // Resolve returns the execution Stack for the given protocol name.
 // If name matches a transport (e.g. "tcp", "udp"), the stack has no app layers.
 // If name matches an app layer (e.g. "tls", "minecraft"), the stack is
 // [required transport] + [app layer].
+// If name matches a composite stack (e.g. "https"), the pre-built stack is returned.
 func Resolve(name string) (*Stack, error) {
 	mu.RLock()
 	defer mu.RUnlock()
 	key := strings.ToLower(name)
+
+	// Check composite registry first (e.g. "https" = tcp+tls+http)
+	if entry, ok := compositeRegistry[key]; ok {
+		s := *entry.stack // shallow copy so callers can't mutate the registry copy
+		s.overrideName = key
+		if entry.defaultPort > 0 {
+			s.overridePort = entry.defaultPort
+		}
+		return &s, nil
+	}
 
 	// Check transport registry first (tcp, udp are standalone stacks)
 	if t, ok := transportRegistry[key]; ok {
@@ -165,6 +235,18 @@ func ListAll() []LayerInfo {
 			Description: a.Description(),
 			DefaultPort: a.DefaultPort(),
 			Transport:   a.BaseTransport(),
+		})
+	}
+	for name, entry := range compositeRegistry {
+		port := entry.defaultPort
+		if port == 0 {
+			port = entry.stack.DefaultPort()
+		}
+		out = append(out, LayerInfo{
+			Name:        name,
+			Description: entry.description,
+			DefaultPort: port,
+			Transport:   entry.stack.Transport.Transport(),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

@@ -50,6 +50,7 @@ greet tls [2606:4700:4700::1111]:443
 | `tcp`         | 80          | Plain TCP connectivity check. |
 | `udp`         | 53          | UDP probe — sends an empty datagram and waits for a response. |
 | `tls`         | 443         | TLS handshake + certificate chain inspection. |
+| `http`        | 80          | HTTP request/response probe. |
 | `ssh`         | 22          | Reads the server's SSH version banner. |
 | `minecraft`   | 25565       | Minecraft Java Edition handshake + status request. |
 | `postgresql`  | 5432        | PostgreSQL `SSLRequest` probe. |
@@ -64,6 +65,20 @@ greet tls [2606:4700:4700::1111]:443
 ## Protocol-specific flags
 
 Protocol layers can register their own flags. These are automatically discovered by the CLI. Only flags for layers in the resolved stack are available.
+
+### HTTP
+
+| Flag              | Type   | Default | Description |
+|-------------------|--------|---------|-------------|
+| `--method`        | string | `"GET"` | HTTP method (e.g. GET, POST, HEAD). |
+| `--path`          | string | `"/"`   | Request path and optional query (e.g. `/users?sort=name`). |
+| `--max-body`      | int    | 1 MiB   | Maximum response body bytes to buffer. |
+| `--max-redirects` | int    | `0`     | Maximum number of redirects to follow (0 = none). |
+| `--header`        | string |         | Request header in `Name:Value` form; may be repeated. |
+
+```bash
+greet http example.com --method POST --path /login --max-redirects 3 --header "Content-Type:application/json"
+```
 
 ### Minecraft
 
@@ -97,6 +112,7 @@ Output:
 
 ```
 Available protocols:
+  http           :80    HTTP request/response probe
   minecraft      :25565 Minecraft Java Edition handshake + status request
   postgresql     :5432  PostgreSQL startup packet exchange
   ssh            :22    SSH version banner exchange
@@ -168,6 +184,33 @@ Success:   true
     [2] (root)
         Subject:           CN=DigiCert Global Root G2
         ...
+```
+
+### HTTP example
+
+```bash
+$ greet http example.com --max-redirects 1
+```
+
+```
+Protocol:  http
+Transport: tcp
+TTDR:      5.1ms
+RTT:       14.2ms
+Success:   true
+
+[tcp]
+  TTFB:    14.2ms
+  TTLB:    14.2ms
+  Success: true
+
+[http]
+  TTFB:    45.6ms
+  TTLB:    46.1ms
+  Success: true
+  Protocol Version: HTTP/1.1
+  Status: 200 OK
+  Status Code: 200
 ```
 
 ### SSH example

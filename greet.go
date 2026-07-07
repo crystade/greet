@@ -119,8 +119,12 @@ func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts .
 	}
 
 	// Step 2: run each app layer in order over the shared connection.
+	// Each layer may upgrade conn (e.g. TLS wraps it); pass the upgraded conn
+	// to the next layer. The engine's defer conn.Close() closes the original
+	// transport conn — layers must not close it themselves.
+	current := conn
 	for _, app := range stack.Apps {
-		data, timing, handshakeErr := app.Handshake(ctx, start, conn, host, port, &cfg)
+		next, data, timing, handshakeErr := app.Handshake(ctx, start, current, host, port, &cfg)
 
 		lr := LayerResult{
 			Name:    app.Name(),
@@ -134,6 +138,9 @@ func GreetStack(ctx context.Context, stack *Stack, host string, port int, opts .
 		if handshakeErr != nil {
 			result.Success = false
 			return result, handshakeErr
+		}
+		if next != nil {
+			current = next
 		}
 	}
 

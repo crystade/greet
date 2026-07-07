@@ -195,6 +195,32 @@ Each protocol subpackage defines its own `Data` struct for the JSON payload with
 |-----------------|--------------------|----------|-------------|
 | `VersionString` | `"versionString"`  | `string` | SSH server version string, e.g. `"SSH-2.0-OpenSSH_9.6"`. |
 
+### HTTP (`jsonapi/http`)
+
+| Field             | JSON key          | Type            | Description |
+|-------------------|-------------------|-----------------|-------------|
+| `ProtocolVersion` | `"protocolVersion"`| `string`        | The HTTP version from the response status line. |
+| `StatusCode`      | `"statusCode"`    | `int`           | The numeric HTTP status code. |
+| `Status`          | `"status"`        | `string`        | The full status text. |
+| `ResponseHeaders` | `"responseHeaders"`| `[]Header`      | The response headers in the order received. |
+| `Redirects`       | `"redirects"`     | `[]RedirectHop` | The chain of redirects that were followed. |
+
+**Header:**
+
+| Field   | JSON key | Type     |
+|---------|----------|----------|
+| `Name`  | `"name"` | `string` |
+| `Value` | `"value"`| `string` |
+
+**RedirectHop:**
+
+| Field             | JSON key          | Type       |
+|-------------------|-------------------|------------|
+| `URL`             | `"url"`           | `string`   |
+| `StatusCode`      | `"statusCode"`    | `int`      |
+| `Method`          | `"method"`        | `string`   |
+| `ResponseHeaders` | `"responseHeaders"`| `[]Header` |
+
 ### Minecraft (`jsonapi/minecraft`)
 
 | Field        | JSON key        | Type     | Description |
@@ -219,6 +245,16 @@ Protocols can expose JSON-configurable options that are decoded into engine `Gre
 | Field              | JSON key            | Type  | Description |
 |--------------------|---------------------|-------|-------------|
 | `ProtocolVersion`  | `"protocolVersion"` | `int` | Minecraft protocol version number (e.g. 775 for 1.20.4). |
+
+### HTTP options
+
+| Field                  | JSON key               | Type       | Description |
+|------------------------|------------------------|------------|-------------|
+| `Target`               | `"target"`             | `string`   | Request path/target. |
+| `Method`               | `"method"`             | `string`   | HTTP method. |
+| `Headers`              | `"headers"`            | `[]Header` | Additional request headers to send. |
+| `MaxResponseBodyBytes` | `"maxResponseBodyBytes"`| `int64`    | Max bytes of response body to buffer. |
+| `MaxRedirectFollow`    | `"maxRedirectFollow"`  | `int`      | Max redirects to follow. |
 
 ### PostgreSQL options
 
@@ -383,6 +419,41 @@ func main() {
     out, _ := json.MarshalIndent(resp, "", "  ")
     fmt.Println(string(out))
 }
+```
+
+## Injecting runtime configuration
+
+Some protocol configurations require runtime objects that cannot be serialized to JSON, such as the HTTP layer's `BodyReader` (`io.Reader`) or `RedirectValidator` (callback function).
+
+When using `req.GreetOptions()` to decode JSON options, it generates a `greet.WithLayerConfig` that completely overwrites any previous configuration for that layer. To inject runtime objects into a JSON-derived configuration, you must append a custom `GreetOption` that mutates the decoded pointer.
+
+```go
+opts, err := req.GreetOptions()
+if err != nil {
+    panic(err)
+}
+
+// Check if the JSON request included HTTP options
+if _, hasHTTP := req.Options[greethttp.ProtocolName]; hasHTTP {
+    // If yes, append a custom option to mutate the JSON-decoded config pointer
+    opts = append(opts, func(c *greet.GreetConfig) {
+        if raw := c.LayerConfig(greethttp.ProtocolName); raw != nil {
+            if cfg, ok := raw.(*greethttp.HTTPConfig); ok {
+                cfg.BodyReader = strings.NewReader(`{"login":"admin"}`)
+                cfg.RedirectValidator = myCustomValidator
+            }
+        }
+    })
+} else {
+    // If no JSON options were provided, use the standard option
+    opts = append(opts, greet.WithLayerConfig(greethttp.ProtocolName, &greethttp.HTTPConfig{
+        BodyReader: strings.NewReader(`{"login":"admin"}`),
+        RedirectValidator: myCustomValidator,
+    }))
+}
+
+// Run the greet operation with the merged options
+result, err := greet.Greet(ctx, req.Protocol, req.Target, opts...)
 ```
 
 ## Field naming convention

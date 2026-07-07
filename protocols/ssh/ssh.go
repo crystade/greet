@@ -36,7 +36,7 @@ func (s *SSH) BaseTransport() greet.Transport { return greet.TransportTCP }
 
 // Handshake reads the SSH version banner over an already-dialed conn.
 // start is the shared timing anchor from the transport dial.
-func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
+func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
 	// Set read deadline from context
@@ -55,14 +55,14 @@ func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, hos
 		if err != nil {
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() {
-				return nil, greet.LayerTiming{}, &greet.GreetError{
+				return nil, nil, greet.LayerTiming{}, &greet.GreetError{
 					Code:     ErrSSHBannerTimeout,
 					Message:  fmt.Sprintf("timed out reading SSH banner from %s", addr),
 					Protocol: ProtocolName,
 					Cause:    err,
 				}
 			}
-			return nil, greet.LayerTiming{}, &greet.GreetError{
+			return nil, nil, greet.LayerTiming{}, &greet.GreetError{
 				Code:     ErrSSHInvalidBanner,
 				Message:  fmt.Sprintf("failed to read SSH banner from %s: %v", addr, err),
 				Protocol: ProtocolName,
@@ -79,7 +79,7 @@ func (s *SSH) Handshake(ctx context.Context, start time.Time, conn net.Conn, hos
 	}
 	ttlb := time.Since(start) // TTLB = banner fully read
 
-	return &SSHResult{VersionString: banner}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
+	return conn, &SSHResult{VersionString: banner}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 }
 
 func init() {

@@ -68,15 +68,16 @@ func (t *TLS) DefaultPort() int               { return DefaultTLSPort }
 func (t *TLS) BaseTransport() greet.Transport { return greet.TransportTCP }
 
 // Handshake upgrades conn to TLS, performs the handshake, and returns the
-// certificate chain with Chrome-style status checks.
-func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (any, greet.LayerTiming, error) {
+// certificate chain with Chrome-style status checks. It returns the *tls.Conn
+// so subsequent layers (e.g. http) can read/write over the encrypted channel.
+func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, any, greet.LayerTiming, error) {
 
 	tlsConn := cryptotls.Client(conn, &cryptotls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // intentional: we report cert status, not enforce it
 		ServerName:         host,
 	})
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return nil, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrTLSHandshakeFailed,
 			Message:  fmt.Sprintf("TLS handshake with %s:%d failed: %v", host, port, err),
 			Protocol: ProtocolName,
@@ -88,7 +89,7 @@ func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, hos
 
 	state := tlsConn.ConnectionState()
 	if len(state.PeerCertificates) == 0 {
-		return nil, greet.LayerTiming{}, &greet.GreetError{
+		return nil, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrTLSHandshakeFailed,
 			Message:  fmt.Sprintf("TLS handshake with %s:%d completed but no certificates presented", host, port),
 			Protocol: ProtocolName,
@@ -130,7 +131,7 @@ func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, hos
 		chainStatus = []string{"OK"}
 	}
 
-	return &TLSResult{CertChain: chain, Status: chainStatus}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
+	return tlsConn, &TLSResult{CertChain: chain, Status: chainStatus}, greet.LayerTiming{TTFB: ttfb, TTLB: ttlb}, nil
 }
 
 // checkCert runs Chrome-style CERT_ error checks on a certificate.
