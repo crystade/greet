@@ -9,9 +9,11 @@ import (
 	"crypto/sha256"
 	cryptotls "crypto/tls"
 	"crypto/x509"
+	"flag"
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -74,15 +76,111 @@ func (t *TLS) Description() string            { return "TLS certificate check" }
 func (t *TLS) DefaultPort() int               { return DefaultTLSPort }
 func (t *TLS) BaseTransport() greet.Transport { return greet.TransportTCP }
 
+// RegisterFlags adds TLS-specific flags to the FlagSet.
+func (t *TLS) RegisterFlags(fs *flag.FlagSet) {
+	fs.String("server-name", "", "TLS SNI hostname override (default: target host)")
+	fs.String("client-cert", "", "Path to PEM client certificate for mTLS (key may be bundled)")
+	fs.String("client-key", "", "Path to PEM client private key (default: bundled in --client-cert)")
+	fs.String("ca-cert", "", "Path to PEM CA certificate for trust verification")
+	fs.Bool("insecure", true, "Skip certificate verification (default true)")
+}
+
+// ParseFlags reads TLS-specific flag values and returns GreetOptions.
+func (t *TLS) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
+	serverName := ""
+	if f := fs.Lookup("server-name"); f != nil {
+		serverName = f.Value.String()
+	}
+
+	certFile := ""
+	if f := fs.Lookup("client-cert"); f != nil {
+		certFile = f.Value.String()
+	}
+
+	keyFile := ""
+	if f := fs.Lookup("client-key"); f != nil {
+		keyFile = f.Value.String()
+	}
+
+	caFile := ""
+	if f := fs.Lookup("ca-cert"); f != nil {
+		caFile = f.Value.String()
+	}
+
+	insecure := true
+	if f := fs.Lookup("insecure"); f != nil {
+		if getter, ok := f.Value.(flag.Getter); ok {
+			if v, ok := getter.Get().(bool); ok {
+				insecure = v
+			}
+		}
+	}
+
+	// Read files into bytes (CLI handles files; library callers pass bytes directly).
+	var certPEM, keyPEM, caPEM []byte
+	if certFile != "" {
+		data, err := os.ReadFile(certFile)
+		if err != nil {
+			return nil, fmt.Errorf("tls: reading client cert %q: %w", certFile, err)
+		}
+		certPEM = data
+	}
+	if keyFile != "" {
+		data, err := os.ReadFile(keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("tls: reading client key %q: %w", keyFile, err)
+		}
+		keyPEM = data
+	}
+	if caFile != "" {
+		data, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("tls: reading CA cert %q: %w", caFile, err)
+		}
+		caPEM = data
+	}
+
+	return []greet.GreetOption{
+		greet.WithLayerConfig(ProtocolName, &TLSConfig{
+			ServerName:         serverName,
+			CertPEM:            certPEM,
+			KeyPEM:             keyPEM,
+			CAPEM:              caPEM,
+			InsecureSkipVerify: insecure,
+		}),
+	}, nil
+}
+
 // Handshake upgrades conn to TLS, performs the handshake, and returns the
 // certificate chain with Chrome-style status checks. It returns the *tls.Conn
 // so subsequent layers (e.g. http) can read/write over the encrypted channel.
 func (t *TLS) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 
-	tlsConn := cryptotls.Client(conn, &cryptotls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // intentional: we report cert status, not enforce it
-		ServerName:         host,
-	})
+	// Resolve TLS-layer config, defaulting to InsecureSkipVerify + target host.
+	var tlsCfg *TLSConfig
+	if raw := cfg.LayerConfig(ProtocolName); raw != nil {
+		c, ok := raw.(*TLSConfig)
+		if !ok {
+			return nil, nil, greet.LayerTiming{}, &greet.GreetError{
+				Code:     greet.ErrInvalidConfig,
+				Message:  fmt.Sprintf("invalid layer config: expected *TLSConfig, got %T", raw),
+				Protocol: ProtocolName,
+			}
+		}
+		tlsCfg = c
+	}
+
+	cryptoCfg, err := BuildTLSConfig(tlsCfg, host)
+	if err != nil {
+		return nil, nil, greet.LayerTiming{}, &greet.GreetError{
+			Code:     ErrTLSConfigFailed,
+			Message:  fmt.Sprintf("TLS config for %s:%d: %v", host, port, err),
+			Protocol: ProtocolName,
+			Cause:    err,
+		}
+	}
+
+	tlsConn := cryptotls.Client(conn, cryptoCfg)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		return nil, nil, greet.LayerTiming{}, &greet.GreetError{
 			Code:     ErrTLSHandshakeFailed,

@@ -436,6 +436,349 @@ func TestIntegrationHTTPS(t *testing.T) {
 	}
 }
 
+// ---- HTTP ----
+
+// httpCase describes a single HTTP method test.
+type httpCase struct {
+	method string
+	path   string
+}
+
+func TestIntegrationHTTP(t *testing.T) {
+	if err := waitForHost("testserver.host:80", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	cases := []httpCase{
+		{"GET", "/get"},
+		{"POST", "/post"},
+		{"PUT", "/put"},
+		{"PATCH", "/patch"},
+		{"DELETE", "/delete"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.method, func(t *testing.T) {
+			result := cliRun(t, "http", "testserver.host:80",
+				"--method", tc.method,
+				"--path", tc.path,
+			)
+
+			if result.top["Success"] != "true" {
+				t.Errorf("%s %s: expected Success=true, got %v", tc.method, tc.path, result.top["Success"])
+			}
+			if result.top["Protocol"] != "http" {
+				t.Errorf("%s %s: expected Protocol=http, got %v", tc.method, tc.path, result.top["Protocol"])
+			}
+			if result.top["Transport"] != "tcp" {
+				t.Errorf("%s %s: expected Transport=tcp, got %v", tc.method, tc.path, result.top["Transport"])
+			}
+
+			if _, ok := result.layer("tcp"); !ok {
+				t.Errorf("%s %s: expected [tcp] layer", tc.method, tc.path)
+			}
+			httpLayer, ok := result.layer("http")
+			if !ok {
+				t.Fatalf("%s %s: expected [http] layer", tc.method, tc.path)
+			}
+
+			status, ok := httpLayer.fields["Status"]
+			if !ok {
+				t.Errorf("%s %s: [http] layer missing Status field", tc.method, tc.path)
+			} else if !strings.HasPrefix(status, "200") {
+				t.Errorf("%s %s: expected HTTP 200, got %q", tc.method, tc.path, status)
+			}
+
+			if protoVer, ok := httpLayer.fields["Protocol Version"]; !ok || protoVer == "" {
+				t.Errorf("%s %s: [http] layer missing or empty Protocol Version", tc.method, tc.path)
+			}
+
+			assertTiming(t, result)
+		})
+	}
+}
+
+func TestIntegrationHTTPStatus(t *testing.T) {
+	if err := waitForHost("testserver.host:80", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	tests := []struct {
+		code     string
+		expected string
+	}{
+		{"404", "404"},
+		{"500", "500"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.code, func(t *testing.T) {
+			result := cliRun(t, "http", "testserver.host:80",
+				"--path", "/status/"+tt.code,
+			)
+
+			// Any HTTP response (even 4xx/5xx) results in layer success.
+			if result.top["Success"] != "true" {
+				t.Errorf("expected Success=true for HTTP %s, got %v", tt.code, result.top["Success"])
+			}
+
+			httpLayer, ok := result.layer("http")
+			if !ok {
+				t.Fatalf("expected [http] layer")
+			}
+			status, ok := httpLayer.fields["Status"]
+			if !ok {
+				t.Fatalf("[http] layer missing Status field")
+			}
+			if !strings.Contains(status, tt.expected) {
+				t.Errorf("expected Status to contain %q, got %q", tt.expected, status)
+			}
+
+			assertTiming(t, result)
+		})
+	}
+}
+
+func TestIntegrationHTTPRedirect(t *testing.T) {
+	if err := waitForHost("testserver.host:80", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	result := cliRun(t, "http", "testserver.host:80",
+		"--path", "/redirect/3",
+		"--max-redirects", "5",
+	)
+
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
+	}
+
+	httpLayer, ok := result.layer("http")
+	if !ok {
+		t.Fatalf("expected [http] layer")
+	}
+	status, ok := httpLayer.fields["Status"]
+	if !ok {
+		t.Fatalf("[http] layer missing Status field")
+	}
+	if !strings.HasPrefix(status, "200") {
+		t.Errorf("expected HTTP 200 after redirects, got %q", status)
+	}
+
+	if _, ok := httpLayer.fields["Location"]; !ok {
+		t.Errorf("expected Location header from redirect chain in http layer fields, got: %v", httpLayer.fields)
+	}
+
+	assertTiming(t, result)
+}
+
+func TestIntegrationHTTPErrorClose(t *testing.T) {
+	if err := waitForHost("testserver.host:80", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	stdout, stderr, code := cliOutput("http", "testserver.host:80",
+		"--path", "/error/close",
+	)
+
+	// Connection close should result in non-zero exit code.
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code for /error/close, got 0\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+	// Should report an error
+	if !strings.Contains(stderr, "Error:") {
+		t.Errorf("expected error output for /error/close, got stderr: %s", stderr)
+	}
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+}
+
+func TestIntegrationHTTPErrorReset(t *testing.T) {
+	if err := waitForHost("testserver.host:80", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	stdout, stderr, code := cliOutput("http", "testserver.host:80",
+		"--path", "/error/reset",
+	)
+
+	// Connection reset should result in non-zero exit code.
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code for /error/reset, got 0\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+	// Should report a connection-level error
+	if !strings.Contains(stderr, "Error:") {
+		t.Errorf("expected error output for /error/reset, got stderr: %s", stderr)
+	}
+
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+}
+
+// ---- TLS scenarios ----
+
+const tlsTestHost = "testserver.host:443"
+
+func TestIntegrationTLSSelfSigned(t *testing.T) {
+	if err := waitForHost("testserver.host:443", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	result := cliRun(t, "https", "self-signed.testserver.host")
+
+	// TLS handshake succeeds with InsecureSkipVerify.
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
+	}
+
+	// Must have tcp, tls, http layers.
+	assertTLSThreeLayers(t, result)
+
+	// Chain status should NOT be just "OK" for self-signed certs.
+	chainStatus, ok := result.data("Chain Status")
+	if !ok {
+		t.Errorf("expected Chain Status in output")
+	} else if chainStatus == "OK" {
+		t.Errorf("expected non-OK chain status for self-signed cert, got OK")
+	} else {
+		t.Logf("self-signed chain status: %s", chainStatus)
+	}
+
+	assertTiming(t, result)
+}
+
+func TestIntegrationTLSExpired(t *testing.T) {
+	if err := waitForHost("testserver.host:443", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	result := cliRun(t, "https", "expired.testserver.host")
+
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
+	}
+
+	assertTLSThreeLayers(t, result)
+
+	// Chain status should contain an expiry-related warning.
+	chainStatus, ok := result.data("Chain Status")
+	if !ok {
+		t.Errorf("expected Chain Status in output")
+	} else if !strings.Contains(chainStatus, "DATE_INVALID") && !strings.Contains(chainStatus, "expired") {
+		t.Errorf("expected expiry warning in chain status, got: %s", chainStatus)
+	} else {
+		t.Logf("expired chain status: %s", chainStatus)
+	}
+
+	assertTiming(t, result)
+}
+
+func TestIntegrationTLSWrongHost(t *testing.T) {
+	if err := waitForHost("testserver.host:443", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	result := cliRun(t, "https", "wrong-host.testserver.host")
+
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
+	}
+
+	assertTLSThreeLayers(t, result)
+
+	// Chain status should contain a name-mismatch warning.
+	chainStatus, ok := result.data("Chain Status")
+	if !ok {
+		t.Errorf("expected Chain Status in output")
+	} else if !strings.Contains(chainStatus, "COMMON_NAME_INVALID") {
+		t.Errorf("expected COMMON_NAME_INVALID in chain status, got: %s", chainStatus)
+	} else {
+		t.Logf("wrong-host chain status: %s", chainStatus)
+	}
+
+	assertTiming(t, result)
+}
+
+func TestIntegrationTLSUntrustedRoot(t *testing.T) {
+	if err := waitForHost("testserver.host:443", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	result := cliRun(t, "https", "untrusted-root.testserver.host")
+
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
+	}
+
+	assertTLSThreeLayers(t, result)
+
+	// Untrusted root: handshake succeeds (InsecureSkipVerify) but cert
+	// may be flagged as self-signed or have other issues.
+	chainStatus, ok := result.data("Chain Status")
+	if !ok {
+		t.Errorf("expected Chain Status in output")
+	} else {
+		t.Logf("untrusted-root chain status: %s", chainStatus)
+	}
+
+	assertTiming(t, result)
+}
+
+func TestIntegrationTLSRevoked(t *testing.T) {
+	if err := waitForHost("testserver.host:443", 10*time.Second); err != nil {
+		t.Skipf("testserver.host not reachable: %v", err)
+	}
+
+	result := cliRun(t, "https", "revoked.testserver.host")
+
+	if result.top["Success"] != "true" {
+		t.Errorf("expected Success=true, got %v", result.top["Success"])
+	}
+
+	assertTLSThreeLayers(t, result)
+
+	// Revoked cert: handshake succeeds but should have some status flag.
+	chainStatus, ok := result.data("Chain Status")
+	if !ok {
+		t.Errorf("expected Chain Status in output")
+	} else {
+		t.Logf("revoked chain status: %s", chainStatus)
+	}
+
+	assertTiming(t, result)
+}
+
+// assertTLSThreeLayers checks that the result contains tcp, tls, and http layers.
+func assertTLSThreeLayers(t *testing.T, result cliResult) {
+	t.Helper()
+	if _, ok := result.layer("tcp"); !ok {
+		t.Errorf("expected [tcp] layer")
+	}
+	if _, ok := result.layer("tls"); !ok {
+		t.Errorf("expected [tls] layer")
+	}
+	if _, ok := result.layer("http"); !ok {
+		t.Errorf("expected [http] layer")
+	}
+}
+
+// waitForHost checks if a TCP address is reachable. Used to skip tests
+// when external servers (e.g. testserver.host) are unavailable.
+func waitForHost(addr string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		cmd := exec.Command(cliPath, "tcp", addr)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("host %s not reachable after %v", addr, timeout)
+}
+
 // waitForPort retries a TCP connection until it succeeds or times out.
 func waitForPort(addr string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

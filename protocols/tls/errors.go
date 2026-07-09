@@ -7,6 +7,7 @@ import (
 
 const (
 	ErrTLSHandshakeFailed greet.ErrorCode = "tls_handshake_failed"
+	ErrTLSConfigFailed    greet.ErrorCode = "tls_config_failed"
 )
 
 // classifyTCPError maps OS / net errors to typed GreetErrors for TLS.
