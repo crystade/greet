@@ -69,7 +69,7 @@ greet tls [2606:4700:4700::1111]:443
 
 ### Protocol-specific flags
 
-Protocol layers can register their own flags, which the CLI discovers automatically. Only flags for layers in the resolved stack are available.
+Protocol layers can expose CLI flags by registering `flagHandler` entries in the CLI's `init()` registry. Each protocol has a dedicated `flags_*.go` file in `cmd/greet/` that registers and parses its flags into `GreetOption` values.
 
 #### HTTP
 
@@ -103,6 +103,21 @@ greet minecraft mc.example.com --protocol-version 766
 
 ```bash
 greet postgresql db.example.com --sslmode disable
+```
+
+#### TLS
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--server-name` | string | (target host) | TLS SNI hostname override. |
+| `--client-cert` | string | | Path to PEM client certificate for mTLS (key may be bundled). |
+| `--client-key` | string | | Path to PEM client private key (default: bundled in `--client-cert`). |
+| `--ca-cert` | string | | Path to PEM CA certificate for trust verification. |
+| `--insecure` | bool | `true` | Skip certificate verification. |
+
+```bash
+greet tls internal.example.com --server-name public.example.com --insecure
+greet tls mtls.example.com --client-cert cert.pem --client-key key.pem --insecure=false
 ```
 
 ## Commands
@@ -411,3 +426,45 @@ greet tls overseas.example.com --timeout 30s
 ```
 
 The timeout covers DNS + TCP dial + all layer handshakes combined. If the total exceeds the limit, the operation fails with a `deadline_exceeded` or `connection_timeout` error.
+
+## Extending the CLI with flags
+
+To add CLI flags for a new protocol, create a `flags_<name>.go` file in `cmd/greet/`. The file registers a `flagHandler` via `init()` that defines flag registration and parsing logic:
+
+```go
+// cmd/greet/flags_myproto.go
+package main
+
+import (
+    "flag"
+    "github.com/crystade/greet"
+    "github.com/crystade/greet/protocols/myproto"
+)
+
+func init() {
+    registerFlagHandler(myproto.ProtocolName, flagHandler{
+        register: registerMyProtoFlags,
+        parse:    parseMyProtoFlags,
+    })
+}
+
+func registerMyProtoFlags(fs *flag.FlagSet) {
+    fs.Int("my-flag", 1234, "My custom flag")
+}
+
+func parseMyProtoFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
+    val := 1234
+    if f := fs.Lookup("my-flag"); f != nil {
+        if getter, ok := f.Value.(flag.Getter); ok {
+            if v, ok := getter.Get().(int); ok {
+                val = v
+            }
+        }
+    }
+    return []greet.GreetOption{
+        greet.WithLayerConfig(myproto.ProtocolName, &myproto.MyProtoConfig{MyField: val}),
+    }, nil
+}
+```
+
+The CLI automatically discovers registered handlers when it resolves a protocol stack. No changes to the core library or protocol package are needed.

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -36,54 +35,6 @@ func (h *HTTP) Name() string                   { return ProtocolName }
 func (h *HTTP) Description() string            { return "HTTP request/response probe" }
 func (h *HTTP) DefaultPort() int               { return DefaultHTTPPort }
 func (h *HTTP) BaseTransport() greet.Transport { return greet.TransportTCP }
-
-func (h *HTTP) RegisterFlags(fs *flag.FlagSet) {
-	fs.String("method", "GET", "HTTP method (e.g. GET, POST, HEAD)")
-	fs.String("path", "/", "Request path and optional query (e.g. /users?sort=name)")
-	fs.Int64("max-body", DefaultMaxResponseBodyBytes, "Maximum response body bytes to buffer")
-	fs.Int("max-redirects", DefaultMaxRedirectFollow, "Maximum number of redirects to follow (0 = none)")
-	fs.Var(&headerFlag{}, "header", "Request header in Name:Value form; may be repeated")
-}
-
-func (h *HTTP) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
-	method := fs.Lookup("method").Value.String()
-	path := fs.Lookup("path").Value.String()
-
-	var maxBody int64 = DefaultMaxResponseBodyBytes
-	if f := fs.Lookup("max-body"); f != nil {
-		if getter, ok := f.Value.(flag.Getter); ok {
-			if v, ok := getter.Get().(int64); ok {
-				maxBody = v
-			}
-		}
-	}
-
-	var headers []Header
-	if f := fs.Lookup("header"); f != nil {
-		if hf, ok := f.Value.(*headerFlag); ok {
-			headers = hf.headers
-		}
-	}
-
-	maxRedirects := DefaultMaxRedirectFollow
-	if f := fs.Lookup("max-redirects"); f != nil {
-		if getter, ok := f.Value.(flag.Getter); ok {
-			if v, ok := getter.Get().(int); ok {
-				maxRedirects = v
-			}
-		}
-	}
-
-	return []greet.GreetOption{
-		greet.WithLayerConfig(ProtocolName, &HTTPConfig{
-			Target:               path,
-			Method:               method,
-			Headers:              headers,
-			MaxResponseBodyBytes: maxBody,
-			MaxRedirectFollow:    maxRedirects,
-		}),
-	}, nil
-}
 
 // Handshake performs the HTTP request/response exchange over conn.
 // conn may be a plain *net.TCPConn or a *tls.Conn (for https).

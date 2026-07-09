@@ -58,19 +58,16 @@ func main() {
 	fs.String("output-format", "default", "Output format: default or json")
 	fs.Duration("timeout", 5*time.Second, "Global handshake timeout")
 
-	// Collect all FlaggedLayer instances (transport + app layers).
-	type flaggedEntry struct {
-		layer greet.FlaggedLayer
-	}
-	var flagged []flaggedEntry
-	if fl, ok := stack.Transport.(greet.FlaggedLayer); ok {
-		fl.RegisterFlags(fs)
-		flagged = append(flagged, flaggedEntry{fl})
+	// Collect flag handlers for layers in this stack (transport + app layers).
+	var layerFlagHandlers []flagHandler
+	if h, ok := flagHandlers[stack.Transport.Name()]; ok {
+		h.register(fs)
+		layerFlagHandlers = append(layerFlagHandlers, h)
 	}
 	for _, app := range stack.Apps {
-		if fl, ok := app.(greet.FlaggedLayer); ok {
-			fl.RegisterFlags(fs)
-			flagged = append(flagged, flaggedEntry{fl})
+		if h, ok := flagHandlers[app.Name()]; ok {
+			h.register(fs)
+			layerFlagHandlers = append(layerFlagHandlers, h)
 		}
 	}
 
@@ -82,8 +79,8 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	for _, fe := range flagged {
-		extraOpts, err := fe.layer.ParseFlags(fs)
+	for _, h := range layerFlagHandlers {
+		extraOpts, err := h.parse(fs)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

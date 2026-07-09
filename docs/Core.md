@@ -421,19 +421,6 @@ type AppLayer interface {
 - `BaseTransport()` — which transport this layer requires (`TransportTCP` or `TransportUDP`).
 - `Handshake()` — performs the application-level exchange over `conn`. Return the upgraded connection as `next` if you wrap the socket (e.g. TLS); return `conn` unchanged otherwise. `data` must implement `LayerData`.
 
-### FlaggedLayer (optional)
-
-If your layer needs CLI flags, implement `FlaggedLayer` in addition to `AppLayer`:
-
-```go
-type FlaggedLayer interface {
-    RegisterFlags(fs *flag.FlagSet)
-    ParseFlags(fs *flag.FlagSet) ([]GreetOption, error)
-}
-```
-
-The CLI auto-discovers this via type assertion. See `protocols/minecraft/minecraft.go` and `protocols/postgresql/postgresql.go` for reference implementations.
-
 ### Registering your layer
 
 ```go

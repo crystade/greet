@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -85,22 +84,6 @@ func (m *Minecraft) Name() string                   { return ProtocolName }
 func (m *Minecraft) Description() string            { return "Minecraft Java Edition handshake + status request" }
 func (m *Minecraft) DefaultPort() int               { return DefaultMinecraftPort }
 func (m *Minecraft) BaseTransport() greet.Transport { return greet.TransportTCP }
-
-func (m *Minecraft) RegisterFlags(fs *flag.FlagSet) {
-	fs.Int("protocol-version", 775, "Minecraft protocol version (e.g. 775 for 26.1)")
-}
-
-func (m *Minecraft) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
-	ver := 775
-	if f := fs.Lookup("protocol-version"); f != nil {
-		if getter, ok := f.Value.(flag.Getter); ok {
-			if v, ok := getter.Get().(int); ok {
-				ver = v
-			}
-		}
-	}
-	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &MinecraftConfig{ProtocolVersion: ver})}, nil
-}
 
 func (m *Minecraft) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -54,21 +53,6 @@ func (p *PostgreSQL) Name() string                   { return ProtocolName }
 func (p *PostgreSQL) Description() string            { return "PostgreSQL startup packet exchange" }
 func (p *PostgreSQL) DefaultPort() int               { return DefaultPostgreSQLPort }
 func (p *PostgreSQL) BaseTransport() greet.Transport { return greet.TransportTCP }
-
-func (p *PostgreSQL) RegisterFlags(fs *flag.FlagSet) {
-	fs.String("sslmode", "prefer", "SSL mode: prefer (try SSL) or disable (skip SSL)")
-}
-
-func (p *PostgreSQL) ParseFlags(fs *flag.FlagSet) ([]greet.GreetOption, error) {
-	sslMode := fs.Lookup("sslmode").Value.String()
-	switch sslMode {
-	case "prefer", "disable":
-		// valid
-	default:
-		return nil, fmt.Errorf("invalid sslmode %q: must be 'prefer' or 'disable'", sslMode)
-	}
-	return []greet.GreetOption{greet.WithLayerConfig(ProtocolName, &PostgreSQLConfig{SSLMode: sslMode})}, nil
-}
 
 func (p *PostgreSQL) Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *greet.GreetConfig) (net.Conn, greet.LayerData, greet.LayerTiming, error) {
 

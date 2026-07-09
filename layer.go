@@ -2,7 +2,6 @@ package greet
 
 import (
 	"context"
-	"flag"
 	"net"
 	"time"
 )
@@ -62,15 +61,4 @@ type AppLayer interface {
 	// The caller (engine) owns closing the original transport conn; layers that
 	// upgrade conn (e.g. TLS) must not close it — the engine's defer handles it.
 	Handshake(ctx context.Context, start time.Time, conn net.Conn, host string, port int, cfg *GreetConfig) (next net.Conn, data LayerData, timing LayerTiming, err error)
-}
-
-// FlaggedLayer is an optional interface for layers that need CLI-specific flags.
-// The CLI auto-discovers this via type assertion on both TransportLayer and AppLayer.
-type FlaggedLayer interface {
-	// RegisterFlags adds layer-specific flags to a flag.FlagSet.
-	RegisterFlags(fs *flag.FlagSet)
-
-	// ParseFlags returns layer-specific options derived from parsed flags.
-	// Called after fs.Parse(); implementations should read values via fs.Lookup.
-	ParseFlags(fs *flag.FlagSet) ([]GreetOption, error)
 }
