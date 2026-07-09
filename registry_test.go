@@ -4,12 +4,18 @@ import (
 	"testing"
 
 	"github.com/crystade/greet"
-	_ "github.com/crystade/greet/protocols/tcp"
+	"github.com/crystade/greet/protocols/tcp"
 )
 
+func newTestEngine() *greet.Engine {
+	e := greet.NewEngine()
+	e.RegisterTransport(tcp.New())
+	return e
+}
+
 func TestRegistryResolve(t *testing.T) {
-	// TCP is registered via init() from the blank import
-	stack, err := greet.Resolve("tcp")
+	e := newTestEngine()
+	stack, err := e.Resolve("tcp")
 	if err != nil {
 		t.Fatalf("Resolve(tcp) error: %v", err)
 	}
@@ -19,7 +25,8 @@ func TestRegistryResolve(t *testing.T) {
 }
 
 func TestRegistryResolveCaseInsensitive(t *testing.T) {
-	stack, err := greet.Resolve("TCP")
+	e := newTestEngine()
+	stack, err := e.Resolve("TCP")
 	if err != nil {
 		t.Fatalf("Resolve(TCP) error: %v", err)
 	}
@@ -29,14 +36,16 @@ func TestRegistryResolveCaseInsensitive(t *testing.T) {
 }
 
 func TestRegistryResolveUnknown(t *testing.T) {
-	_, err := greet.Resolve("nonexistent")
+	e := newTestEngine()
+	_, err := e.Resolve("nonexistent")
 	if err == nil {
 		t.Fatal("Resolve(nonexistent) should return error")
 	}
 }
 
 func TestRegistryListAll(t *testing.T) {
-	list := greet.ListAll()
+	e := newTestEngine()
+	list := e.ListAll()
 	if len(list) == 0 {
 		t.Fatal("ListAll() returned empty; at least tcp should be registered")
 	}
@@ -50,7 +59,8 @@ func TestRegistryListAll(t *testing.T) {
 }
 
 func TestListProtocols(t *testing.T) {
-	names := greet.ListProtocols()
+	e := newTestEngine()
+	names := e.ListProtocols()
 	if len(names) == 0 {
 		t.Fatal("ListProtocols() returned empty")
 	}
@@ -62,8 +72,9 @@ func TestListProtocols(t *testing.T) {
 }
 
 func TestRegistryResolveStack(t *testing.T) {
+	e := newTestEngine()
 	// Resolving a bare transport by explicit stack
-	stack, err := greet.ResolveStack([]string{"tcp"})
+	stack, err := e.ResolveStack([]string{"tcp"})
 	if err != nil {
 		t.Fatalf("ResolveStack([tcp]) error: %v", err)
 	}
@@ -73,14 +84,16 @@ func TestRegistryResolveStack(t *testing.T) {
 }
 
 func TestRegistryResolveStackEmptyError(t *testing.T) {
-	_, err := greet.ResolveStack([]string{})
+	e := newTestEngine()
+	_, err := e.ResolveStack([]string{})
 	if err == nil {
 		t.Fatal("ResolveStack([]) should return error")
 	}
 }
 
 func TestRegistryResolveStackBadTransport(t *testing.T) {
-	_, err := greet.ResolveStack([]string{"notransport"})
+	e := newTestEngine()
+	_, err := e.ResolveStack([]string{"notransport"})
 	if err == nil {
 		t.Fatal("ResolveStack with unknown transport should return error")
 	}
