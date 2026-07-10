@@ -8,6 +8,10 @@
 - Lightweight: The library constructs raw command from scratch and does not depend on third-party service clients
 - Tracing: The library outputs helpful errors from connection init to handshake
 
+## Playground
+
+Try Greet directly in your browser: https://greet-playground.vercel.app/
+
 ## Installation
 
 ### Library
