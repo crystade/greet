@@ -85,8 +85,16 @@ func (e *Engine) GreetStack(ctx context.Context, stack *Stack, host string, port
 	// result illustrates the protocol stack from a single origin.
 	start := time.Now()
 
-	// Step 1: dial the transport layer
-	conn, ttdr, rtt, err := stack.Transport.Dial(ctx, start, host, port)
+	// Step 1: dial the transport layer — apply per-layer timeout if configured
+	dialCtx := ctx
+	var dialCancel context.CancelFunc
+	if lt := cfg.LayerTimeout(stack.Transport.Name()); lt > 0 {
+		dialCtx, dialCancel = context.WithTimeout(ctx, lt)
+	}
+	conn, ttdr, rtt, err := stack.Transport.Dial(dialCtx, start, host, port)
+	if dialCancel != nil {
+		dialCancel()
+	}
 
 	result := &GreetResult{
 		Protocol:  stack.Name(),

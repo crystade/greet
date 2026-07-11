@@ -11,5 +11,6 @@
 .kilo/
 .roo/
 .cline/
+.commandcode/
 dist/
 secrets/

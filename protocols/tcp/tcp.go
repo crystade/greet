@@ -41,6 +41,9 @@ func (t *TCP) Dial(ctx context.Context, start time.Time, host string, port int) 
 
 	addr := net.JoinHostPort(dns.Address, strconv.Itoa(port))
 	var d net.Dialer
+	if deadline, ok := ctx.Deadline(); ok {
+		d.Timeout = time.Until(deadline)
+	}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	rtt := time.Since(start)
 
