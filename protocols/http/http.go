@@ -190,17 +190,6 @@ func (h *HTTP) Handshake(ctx context.Context, start time.Time, conn net.Conn, ho
 					Cause:    resolveErr,
 				}
 			}
-			// Same-origin, same-scheme gate: we reuse the same TCP/TLS
-			// connection, so cross-origin or cross-scheme redirects are
-			// physically impossible to follow.
-			if !isSameOrigin(redirectURL, secure, host, port) {
-				resp.Body.Close()
-				return nil, nil, greet.LayerTiming{TTFB: ttfb}, &greet.GreetError{
-					Code:     ErrHTTPRedirectCrossOrigin,
-					Message:  fmt.Sprintf("redirect to %q blocked: cross-origin redirects are not supported (reuse connection)", redirectURL.String()),
-					Protocol: ProtocolName,
-				}
-			}
 			// Validate redirect target (SSRF protection — only applied to
 			// redirect targets, never the original user-specified URL).
 			if err := redirectValidator(redirectURL.String()); err != nil {
@@ -351,39 +340,6 @@ func setHostFromURL(req *nethttp.Request, redirectURL *url.URL) {
 			req.Host = redirectURL.Host
 		}
 	}
-}
-
-// isSameOrigin reports whether redirectURL shares the same scheme, host, and
-// port as the original connection, which is required for connection reuse.
-func isSameOrigin(redirectURL *url.URL, secure bool, host string, port int) bool {
-	redirectScheme := redirectURL.Scheme
-	expectedScheme := "http"
-	if secure {
-		expectedScheme = "https"
-	}
-	if redirectScheme != expectedScheme {
-		return false
-	}
-
-	if redirectURL.Hostname() != host {
-		return false
-	}
-
-	redirectPort := portFromURL(redirectURL, secure)
-	return redirectPort == port
-}
-
-// portFromURL returns the effective port for a URL, defaulting to 80 for http
-// and 443 for https when no explicit port is present.
-func portFromURL(u *url.URL, secure bool) int {
-	if u.Port() != "" {
-		p, _ := strconv.Atoi(u.Port())
-		return p
-	}
-	if secure {
-		return 443
-	}
-	return 80
 }
 
 // isSecureConn returns true when conn is a *tls.Conn (i.e. TLS is active).
