@@ -63,6 +63,7 @@ A **stack** is a named combination of one transport layer and zero or more appli
 | `tls` | TCP → TLS |
 | `http` | TCP → HTTP |
 | `https` | TCP → TLS → HTTP |
+| `mcp` | TCP → TLS → MCP |
 | `ssh` | TCP → SSH |
 | `minecraft` | TCP → Minecraft |
 | `postgresql` | TCP → PostgreSQL |
@@ -95,6 +96,7 @@ All durations are `time.Duration`. Use `.Seconds()`, `.Milliseconds()`, or `json
 | `tls` | TCP → TLS | 443 | TLS handshake + full certificate chain inspection. |
 | `http` | TCP → HTTP | 80 | HTTP request/response probe with optional redirect following. |
 | `https` | TCP → TLS → HTTP | 443 | HTTPS request/response probe. |
+| `mcp` | TCP → TLS → MCP | 443 | MCP streamable HTTP initialize handshake + capability probe. |
 | `ssh` | TCP → SSH | 22 | Reads the server's SSH version banner. |
 | `minecraft` | TCP → Minecraft | 25565 | Minecraft Java Edition handshake + status (version, MOTD, player count). |
 | `postgresql` | TCP → PostgreSQL | 5432 | PostgreSQL `SSLRequest` probe — detects SSL support. |
@@ -199,6 +201,7 @@ Each application protocol provides a typed result that implements `LayerData`. T
 |----------|-----------|------------|
 | `tls` | `*tls.TLSResult` | `CertChain []CertChainEntry`, `Status []string` |
 | `http` | `*http.HTTPResult` | `StatusCode`, `Status`, `ResponseHeaders`, `Redirects` |
+| `mcp` | `*mcp.MCPResult` | `ProtocolVersion`, `ServerInfo`, `Instructions`, `Capabilities`, `Resources`, `ResourceTemplates`, `Tools`, `Prompts` |
 | `ssh` | `*ssh.SSHResult` | `VersionString string` |
 | `minecraft` | `*minecraft.MinecraftResult` | `Version`, `MOTD`, `Players`, `MaxPlayers` |
 | `postgresql` | `*postgresql.PostgreSQLResult` | `SSLSupported bool` |
@@ -244,6 +247,29 @@ engine.Greet(ctx, "postgresql", "db.example.com",
 )
 ```
 
+```go
+engine.Greet(ctx, "mcp", "mcp.example.com",
+    greet.WithLayerConfig("mcp", &mcp.MCPConfig{
+        ClientInfo:    mcp.Implementation{Name: "my-client", Version: "1.0.0"},
+        ListResources: true,
+        ListTools:     true,
+    }),
+)
+
+// With a custom path (some MCP servers use /mcp instead of /)
+engine.Greet(ctx, "mcp", "mcp.example.com",
+    greet.WithLayerConfig("mcp", &mcp.MCPConfig{Path: "/mcp"}),
+)
+
+// With Bearer token authentication
+engine.Greet(ctx, "mcp", "mcp.example.com",
+    greet.WithLayerConfig("mcp", &mcp.MCPConfig{
+        BearerToken: "sk-abc123",
+        ListTools:   true,
+    }),
+)
+```
+
 Available config types:
 
 | Protocol | Config type | Fields |
@@ -251,6 +277,7 @@ Available config types:
 | `minecraft` | `*minecraft.MinecraftConfig` | `ProtocolVersion int` (default 775) |
 | `postgresql` | `*postgresql.PostgreSQLConfig` | `SSLMode string` — `"prefer"` (default) or `"disable"` |
 | `http` | `*http.HTTPConfig` | `Target`, `Method`, `Headers`, `MaxResponseBodyBytes`, `MaxRedirectFollow`, `BodyReader`, `RedirectValidator` |
+| `mcp` | `*mcp.MCPConfig` | `ClientInfo`, `Path`, `BearerToken`, `ListResources`, `ListTools`, `ListPrompts`, `ListResourceTemplates` |
 
 ## Error handling
 
@@ -314,6 +341,20 @@ if errors.As(err, &ge) {
 | `http_redirect_ssrf` | SSRF validator rejection. |
 | `http_too_many_redirects` | Redirect limit exceeded. |
 | `http_redirect_cross_origin` | Cross-origin or cross-scheme redirect blocked. |
+
+**MCP:**
+
+| Code | Meaning |
+|------|---------|
+| `mcp_initialize_failed` | Initialize handshake or response parsing failed. |
+| `mcp_unexpected_status` | HTTP response status was not 200/202 where expected. |
+| `mcp_missing_session` | Initialize response did not include `Mcp-Session-Id`. |
+| `mcp_auth_failed` | Bearer authentication failed (401 with parseable WWW-Authenticate). |
+| `mcp_unsupported_oauth` | Server returned 401 with an unsupported WWW-Authenticate scheme. |
+| `mcp_list_resources_failed` | `resources/list` request failed or returned an error. |
+| `mcp_list_tools_failed` | `tools/list` request failed or returned an error. |
+| `mcp_list_prompts_failed` | `prompts/list` request failed or returned an error. |
+| `mcp_list_templates_failed` | `resources/templates/list` request failed or returned an error. |
 
 ### Partial results
 

@@ -101,11 +101,21 @@ func (e *Engine) RegisterStack(name string, layers []string, defaultPort int, de
 	if _, dup := e.compositeRegistry[key]; dup {
 		panic(fmt.Sprintf("greet: composite stack %q already registered", key))
 	}
-	if _, dup := e.appRegistry[key]; dup {
-		panic(fmt.Sprintf("greet: composite stack %q conflicts with app layer", key))
-	}
 	if _, dup := e.transportRegistry[key]; dup {
 		panic(fmt.Sprintf("greet: composite stack %q conflicts with transport", key))
+	}
+
+	// Allow a composite stack to share the name of its outermost app layer.
+	// The stack becomes the canonical public entry point; the app layer is
+	// still reachable via ResolveStack or as part of the stack.
+	outermostApp := ""
+	if len(layers) > 0 {
+		outermostApp = strings.ToLower(layers[len(layers)-1])
+	}
+	if key != outermostApp {
+		if _, dup := e.appRegistry[key]; dup {
+			panic(fmt.Sprintf("greet: composite stack %q conflicts with app layer", key))
+		}
 	}
 
 	if len(layers) == 0 {
@@ -238,6 +248,11 @@ func (e *Engine) ListAll() []LayerInfo {
 		})
 	}
 	for _, a := range e.appRegistry {
+		// If an app layer is shadowed by a composite stack of the same name,
+		// expose only the stack — it is the canonical public entry point.
+		if _, shadowed := e.compositeRegistry[strings.ToLower(a.Name())]; shadowed {
+			continue
+		}
 		out = append(out, LayerInfo{
 			Name:        a.Name(),
 			Description: a.Description(),

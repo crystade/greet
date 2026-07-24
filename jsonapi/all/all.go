@@ -3,6 +3,7 @@ package all
 import (
 	"github.com/crystade/greet/jsonapi"
 	japiHTTP "github.com/crystade/greet/jsonapi/http"
+	japiMCP "github.com/crystade/greet/jsonapi/mcp"
 	japiMinecraft "github.com/crystade/greet/jsonapi/minecraft"
 	japiPostgresql "github.com/crystade/greet/jsonapi/postgresql"
 	japiSSH "github.com/crystade/greet/jsonapi/ssh"
@@ -14,6 +15,7 @@ func Register(c *jsonapi.Codec) {
 	japiTLS.Register(c)
 	japiSSH.Register(c)
 	japiHTTP.Register(c)
+	japiMCP.Register(c)
 	japiMinecraft.Register(c)
 	japiPostgresql.Register(c)
 }

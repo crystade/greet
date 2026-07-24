@@ -22,7 +22,7 @@ codec  := japiall.NewCodec()
 
 | Field | JSON key | Required | Description |
 |-------|----------|----------|-------------|
-| `Protocol` | `"protocol"` | yes | Registered protocol name, e.g. `"tls"`, `"minecraft"`, `"ssh"`, `"postgresql"`. |
+| `Protocol` | `"protocol"` | yes | Registered protocol name, e.g. `"tls"`, `"minecraft"`, `"ssh"`, `"postgresql"`, `"mcp"`. |
 | `Target` | `"target"` | yes | Host or `host:port` to probe. |
 | `Options` | `"options"` | no | Per-protocol options keyed by protocol name. |
 
@@ -117,6 +117,81 @@ All timing values share the same start anchor — see [Timing model](./Core.md#t
 }
 ```
 
+### Example response (MCP)
+
+```json
+{
+  "protocol": "mcp",
+  "transport": "tcp",
+  "ttdrMs": 10.2,
+  "rttMs": 28.7,
+  "success": true,
+  "layers": [
+    {
+      "name": "tcp",
+      "ttfbMs": 28.7,
+      "ttlbMs": 28.7,
+      "success": true
+    },
+    {
+      "name": "tls",
+      "ttfbMs": 55.1,
+      "ttlbMs": 62.3,
+      "success": true,
+      "data": {
+        "certChain": [
+          {
+            "subject": "CN=mcp.example.com",
+            "issuer": "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1",
+            "serial": "1f2a...",
+            "notBefore": "2025-06-01T00:00:00Z",
+            "notAfter": "2026-07-01T23:59:59Z",
+            "version": 3,
+            "dnsNames": ["mcp.example.com"],
+            "isCa": false,
+            "signatureAlgo": "SHA256-RSA",
+            "publicKeyAlgo": "RSA",
+            "sha256Fingerprint": "d4e5f6...",
+            "status": ["ok"]
+          }
+        ],
+        "status": ["ok"]
+      }
+    },
+    {
+      "name": "mcp",
+      "ttfbMs": 75.9,
+      "ttlbMs": 145.2,
+      "success": true,
+      "data": {
+        "protocolVersion": "2026-07-28",
+        "serverInfo": {
+          "name": "example-mcp-server",
+          "version": "2.1.0"
+        },
+        "instructions": "Use this server to query the example API.",
+        "capabilities": {
+          "tools": {}
+        },
+        "tools": [
+          {
+            "name": "search",
+            "description": "Search the example dataset.",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "query": { "type": "string" }
+              },
+              "required": ["query"]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
 ## Protocol data schemas
 
 Each protocol defines its own `data` payload within a layer.
@@ -188,6 +263,22 @@ Each protocol defines its own `data` payload within a layer.
 |----------|------|-------------|
 | `"sslSupported"` | bool | Whether the server supports SSL/TLS. |
 
+### MCP
+
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"protocolVersion"` | string | Negotiated MCP protocol version. |
+| `"serverInfo"` | `Implementation` | Server name, version, and metadata. |
+| `"instructions"` | string | Human-readable server instructions. |
+| `"capabilities"` | `ServerCapabilities` | Optional server capabilities (prompts, resources, tools, …). |
+| `"resources"` | `[]Resource` | Resources discovered via `resources/list`. Present only when `listResources` is enabled. |
+| `"resourceTemplates"` | `[]ResourceTemplate` | Resource templates discovered via `resources/templates/list`. Present only when enabled. |
+| `"tools"` | `[]Tool` | Tools discovered via `tools/list`. Present only when `listTools` is enabled. |
+| `"prompts"` | `[]Prompt` | Prompts discovered via `prompts/list`. Present only when `listPrompts` is enabled. |
+
+Field shapes for `Implementation`, `ServerCapabilities`, `Resource`, `ResourceTemplate`, `Tool`, and
+`Prompt` follow the [MCP specification](https://spec.modelcontextprotocol.io/).
+
 ## Protocol options
 
 Options are supplied in the `"options"` field of the request, keyed by protocol name.
@@ -213,6 +304,33 @@ Options are supplied in the `"options"` field of the request, keyed by protocol 
 | JSON key | Type | Description |
 |----------|------|-------------|
 | `"sslMode"` | string | SSL mode: `"prefer"` (default) or `"disable"`. |
+
+### MCP options
+
+| JSON key | Type | Description |
+|----------|------|-------------|
+| `"clientInfo"` | `Implementation` | Client implementation info sent in the initialize request. |
+| `"path"` | string | Request path for MCP streamable HTTP (e.g. `"/mcp"`). Defaults to `"/"`. |
+| `"bearerToken"` | string | Optional OAuth 2.0 Bearer token for the Authorization header. |
+| `"listResources"` | bool | Whether to list server resources after the handshake. |
+| `"listTools"` | bool | Whether to list server tools after the handshake. |
+| `"listPrompts"` | bool | Whether to list server prompts after the handshake. |
+| `"listResourceTemplates"` | bool | Whether to list resource templates after the handshake. |
+
+```json
+{
+  "protocol": "mcp",
+  "target": "mcp.example.com",
+  "options": {
+    "mcp": {
+      "path": "/mcp",
+      "bearerToken": "sk-abc123",
+      "clientInfo": { "name": "my-client", "version": "1.0.0" },
+      "listTools": true
+    }
+  }
+}
+```
 
 TLS and SSH do not accept options.
 

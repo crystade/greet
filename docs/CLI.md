@@ -105,6 +105,23 @@ greet minecraft mc.example.com --protocol-version 766
 greet postgresql db.example.com --sslmode disable
 ```
 
+#### MCP
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--path` | string | `"/"` | Request path for MCP streamable HTTP (e.g. `/mcp`). |
+| `--bearer-token` | string | `""` | Bearer token for MCP Authorization header. |
+| `--list-resources` | bool | `false` | List server resources after the handshake. |
+| `--list-tools` | bool | `false` | List server tools after the handshake. |
+| `--list-prompts` | bool | `false` | List server prompts after the handshake. |
+| `--list-resource-templates` | bool | `false` | List resource templates after the handshake. |
+
+```bash
+greet mcp mcp.example.com --list-tools --list-resources
+greet mcp mcp.example.com --path /mcp
+greet mcp mcp.example.com --bearer-token "sk-abc123" --list-tools
+```
+
 #### TLS
 
 | Flag | Type | Default | Description |
@@ -133,6 +150,7 @@ Output:
 ```
 Available protocols:
   http           :80    HTTP request/response probe
+  mcp            :443   MCP streamable HTTP initialize handshake + capability probe
   minecraft      :25565 Minecraft Java Edition handshake + status request
   postgresql     :5432  PostgreSQL SSLRequest probe
   ssh            :22    SSH version banner exchange
@@ -313,6 +331,53 @@ Success:   true
   SSL Supported: true
 ```
 
+**MCP:**
+
+```bash
+$ greet mcp mcp.example.com --list-tools
+```
+
+```
+Protocol:  mcp
+Transport: tcp
+TTDR:      10.2ms
+RTT:       28.7ms
+Success:   true
+
+[tcp]
+  TTFB:    28.7ms
+  TTLB:    28.7ms
+  Success: true
+
+[tls]
+  TTFB:    55.1ms
+  TTLB:    62.3ms
+  Success: true
+  Subject: CN=mcp.example.com
+  Issuer: CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1
+  Serial: 1f2a...
+  Not Before: 2025-06-01T00:00:00Z
+  Not After: 2026-07-01T23:59:59Z
+  Version: 3
+  DNS Names: [mcp.example.com]
+  Signature Algorithm: SHA256-RSA
+  Public Key Algorithm: RSA
+  Fingerprint (SHA-256): d4e5f6...
+  Chain Status: ok
+
+[mcp]
+  TTFB:    75.9ms
+  TTLB:    145.2ms
+  Success: true
+  Protocol Version: 2026-07-28
+  Server: example-mcp-server 2.1.0
+  Instructions: Use this server to query the example API.
+  Capabilities: tools
+  Tools (1):
+    - search
+      Search the example dataset.
+```
+
 ### JSON output
 
 Use `--output-format json` for machine-readable output. The schema is fully described in [JSON API.md](./JSON%20API.md).
@@ -403,6 +468,12 @@ greet tls example.com --output-format json | jq '.layers[] | select(.name=="tls"
 
 # Get Minecraft player count
 greet minecraft mc.hypixel.net --output-format json | jq '.layers[] | select(.name=="minecraft") | .data.players'
+
+# List MCP server tools
+greet mcp mcp.example.com --output-format json --list-tools | jq '.layers[] | select(.name=="mcp") | .data.tools[] | .name'
+
+# Extract MCP server version
+greet mcp mcp.example.com --output-format json | jq '.layers[] | select(.name=="mcp") | .data.serverInfo.version'
 
 # Wait for a server to come online
 while ! greet tcp my-server:8080 --timeout 2s; do sleep 5; done
