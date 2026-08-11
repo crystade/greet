@@ -118,6 +118,7 @@ func (h *HTTP) Handshake(ctx context.Context, start time.Time, conn net.Conn, ho
 	setHost(currentReq, secure, host, port)
 
 	// --- redirect loop ---
+	jar := newCookieJar()
 	var (
 		redirects     []RedirectEntry
 		br            = bufio.NewReader(conn)
@@ -232,6 +233,11 @@ func (h *HTTP) Handshake(ctx context.Context, start time.Time, conn net.Conn, ho
 				ResponseHeaders: redirectRespHeaders,
 			})
 
+			// Collect Set-Cookie headers from the redirect response into
+			// the cookie jar, which handles Domain, Path, Expires, and
+			// Max-Age scoping per RFC 6265.
+			jar.setCookies(currentReq.URL, resp.Cookies())
+
 			// Drain and close the redirect response body before reusing
 			// the connection for the next request.
 			io.Copy(io.Discard, resp.Body)
@@ -251,6 +257,11 @@ func (h *HTTP) Handshake(ctx context.Context, start time.Time, conn net.Conn, ho
 			// Re-apply caller-supplied headers to the redirect request.
 			for _, hdr := range httpCfg.Headers {
 				currentReq.Header.Add(hdr.Name, hdr.Value)
+			}
+
+			// Forward matching cookies from the jar to the redirect target.
+			if cookieHeader := jar.cookiesFor(currentReq.URL); cookieHeader != "" {
+				currentReq.Header.Set("Cookie", cookieHeader)
 			}
 
 			// Set Host header for the redirect target.
