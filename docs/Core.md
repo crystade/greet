@@ -67,6 +67,7 @@ A **stack** is a named combination of one transport layer and zero or more appli
 | `ssh` | TCP → SSH |
 | `minecraft` | TCP → Minecraft |
 | `postgresql` | TCP → PostgreSQL |
+| `redis` | TCP → Redis |
 
 ### Timing model
 
@@ -100,6 +101,7 @@ All durations are `time.Duration`. Use `.Seconds()`, `.Milliseconds()`, or `json
 | `ssh` | TCP → SSH | 22 | Reads the server's SSH version banner. |
 | `minecraft` | TCP → Minecraft | 25565 | Minecraft Java Edition handshake + status (version, MOTD, player count). |
 | `postgresql` | TCP → PostgreSQL | 5432 | PostgreSQL `SSLRequest` probe — detects SSL support. |
+| `redis` | TCP → Redis | 6379 | Redis PING or HELLO probe (HELLO 3 with automatic fallback to HELLO 2). |
 
 ## Setup
 
@@ -205,6 +207,7 @@ Each application protocol provides a typed result that implements `LayerData`. T
 | `ssh` | `*ssh.SSHResult` | `VersionString string` |
 | `minecraft` | `*minecraft.MinecraftResult` | `Version`, `MOTD`, `Players`, `MaxPlayers` |
 | `postgresql` | `*postgresql.PostgreSQLResult` | `SSLSupported bool` |
+| `redis` | `*redis.RedisResult` | `Pong bool` (PING only), `Info map[string]string` (HELLO only; `Info["proto"]` is the negotiated RESP version) |
 
 ```go
 result, _ := engine.Greet(ctx, "tls", "example.com:443")
@@ -248,6 +251,21 @@ engine.Greet(ctx, "postgresql", "db.example.com",
 ```
 
 ```go
+// PING (default)
+engine.Greet(ctx, "redis", "redis.example.com")
+
+// HELLO, auto mode: tries RESP 3, falls back to RESP 2
+engine.Greet(ctx, "redis", "redis.example.com",
+    greet.WithLayerConfig("redis", &redis.RedisConfig{UseHello: true}),
+)
+
+// RESP 2 only
+engine.Greet(ctx, "redis", "redis.example.com",
+    greet.WithLayerConfig("redis", &redis.RedisConfig{HelloMode: redis.HelloRESP2}),
+)
+```
+
+```go
 engine.Greet(ctx, "mcp", "mcp.example.com",
     greet.WithLayerConfig("mcp", &mcp.MCPConfig{
         ClientInfo:    mcp.Implementation{Name: "my-client", Version: "1.0.0"},
@@ -276,8 +294,19 @@ Available config types:
 |----------|-------------|--------|
 | `minecraft` | `*minecraft.MinecraftConfig` | `ProtocolVersion int` (default 775) |
 | `postgresql` | `*postgresql.PostgreSQLConfig` | `SSLMode string` — `"prefer"` (default) or `"disable"` |
+| `redis` | `*redis.RedisConfig` | `UseHello bool` (send `HELLO` instead of `PING`, default `false`), `HelloMode` (`redis.HelloAuto` (default), `redis.HelloRESP2` or `redis.HelloRESP3`; a non-empty value implies `UseHello`) |
 | `http` | `*http.HTTPConfig` | `Target`, `Method`, `Headers`, `MaxResponseBodyBytes`, `MaxRedirectFollow`, `BodyReader`, `RedirectValidator` |
 | `mcp` | `*mcp.MCPConfig` | `ClientInfo`, `Path`, `BearerToken`, `ListResources`, `ListTools`, `ListPrompts`, `ListResourceTemplates` |
+
+#### Redis HELLO modes
+
+| `HelloMode` | Behavior |
+|-------------|----------|
+| `redis.HelloAuto` (default) | Send `HELLO 3`. If the server rejects it with an unknown-command (`-ERR`) or unsupported-version (`-NOPROTO`) error, retry once with `HELLO 2`. Other server errors such as `-NOAUTH` are not retried. |
+| `redis.HelloRESP3` | Send `HELLO 3` only, with no fallback. |
+| `redis.HelloRESP2` | Send `HELLO 2` only. |
+
+`redis.ParseHelloMode(s)` converts a string (`"auto"`, `"resp2"`, `"resp3"`, case-insensitive; empty means `auto`) to a `HelloMode` and returns an error for anything else.
 
 ## Error handling
 
@@ -355,6 +384,14 @@ if errors.As(err, &ge) {
 | `mcp_list_tools_failed` | `tools/list` request failed or returned an error. |
 | `mcp_list_prompts_failed` | `prompts/list` request failed or returned an error. |
 | `mcp_list_templates_failed` | `resources/templates/list` request failed or returned an error. |
+
+**Redis:**
+
+| Code | Meaning |
+|------|---------|
+| `send_failed` | Failed to send the Redis command. |
+| `timeout` | Timed out sending the command or reading the response. |
+| `unexpected_response` | Response was not a valid PING or HELLO reply, could not be parsed as RESP, or was a server error reply such as `-NOAUTH`. |
 
 ### Partial results
 
