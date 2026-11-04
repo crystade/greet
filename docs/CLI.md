@@ -105,6 +105,28 @@ greet minecraft mc.example.com --protocol-version 766
 greet postgresql db.example.com --sslmode disable
 ```
 
+#### Redis
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--hello` | bool | `false` | Use `HELLO` instead of `PING` (returns server version, role, mode, etc.). The RESP version defaults to `auto`. |
+| `--hello-mode` | string | `auto` (when HELLO is used) | RESP version requested by `HELLO`: `auto`, `resp2` or `resp3`. Implies `--hello`. |
+
+Without `--hello` or `--hello-mode`, the probe sends `PING`.
+
+`--hello-mode` values:
+
+- `auto`: send `HELLO 3`; if the server rejects it (unknown command or unsupported protocol version), retry once with `HELLO 2`.
+- `resp3`: send `HELLO 3` only, with no fallback.
+- `resp2`: send `HELLO 2` only.
+
+```bash
+greet redis redis.example.com
+greet redis redis.example.com --hello
+greet redis redis.example.com:6380 --hello-mode resp2
+greet redis redis.example.com --hello-mode resp3
+```
+
 #### MCP
 
 | Flag | Type | Default | Description |
@@ -153,6 +175,7 @@ Available protocols:
   mcp            :443   MCP streamable HTTP initialize handshake + capability probe
   minecraft      :25565 Minecraft Java Edition handshake + status request
   postgresql     :5432  PostgreSQL SSLRequest probe
+  redis          :6379  Redis PING/HELLO probe
   ssh            :22    SSH version banner exchange
   tcp            :80    Raw TCP connectivity probe
   tls            :443   TLS certificate check
@@ -331,6 +354,53 @@ Success:   true
   SSL Supported: true
 ```
 
+**Redis:**
+
+```bash
+$ greet redis redis.example.com
+```
+
+```
+Protocol:  redis
+Transport: tcp
+TTDR:      4.0ms
+RTT:       11.3ms
+Success:   true
+
+[tcp]
+  TTFB:    11.3ms
+  TTLB:    11.3ms
+  Success: true
+
+[redis]
+  TTFB:    11.5ms
+  TTLB:    23.9ms
+  Success: true
+  Pong: true
+```
+
+With `--hello`, the layer shows the server info returned by `HELLO` (sorted by key) instead of `Pong`:
+
+```bash
+$ greet redis redis.example.com --hello
+```
+
+```
+[redis]
+  TTFB:    11.6ms
+  TTLB:    24.2ms
+  Success: true
+  Server Info:
+    id: 42
+    mode: standalone
+    proto: 3
+    role: master
+    server: redis
+    version: 7.2.4
+```
+
+`proto` is the RESP version that was negotiated. With `--hello-mode auto` it is `2` when the server rejected `HELLO 3`.
+
 **MCP:**
 
 ```bash
@@ -468,6 +538,9 @@ greet tls example.com --output-format json | jq '.layers[] | select(.name=="tls"
 
 # Get Minecraft player count
 greet minecraft mc.hypixel.net --output-format json | jq '.layers[] | select(.name=="minecraft") | .data.players'
+
+# Check which RESP version a Redis server negotiated
+greet redis redis.example.com --hello-mode auto --output-format json | jq '.layers[] | select(.name=="redis") | .data.info.proto'
 
 # List MCP server tools
 greet mcp mcp.example.com --output-format json --list-tools | jq '.layers[] | select(.name=="mcp") | .data.tools[] | .name'

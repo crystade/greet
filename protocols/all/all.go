@@ -6,6 +6,7 @@ import (
 	"github.com/crystade/greet/protocols/mcp"
 	"github.com/crystade/greet/protocols/minecraft"
 	"github.com/crystade/greet/protocols/postgresql"
+	"github.com/crystade/greet/protocols/redis"
 	"github.com/crystade/greet/protocols/ssh"
 	"github.com/crystade/greet/protocols/tcp"
 	"github.com/crystade/greet/protocols/tls"
@@ -22,6 +23,7 @@ func Register(e *greet.Engine) {
 	e.RegisterApp(minecraft.New())
 	e.RegisterApp(postgresql.New())
 	e.RegisterApp(mcp.New())
+	e.RegisterApp(redis.New())
 	e.RegisterStack("mcp", []string{"tcp", "tls", "mcp"}, 443, "MCP handshake + capability probe")
 	e.RegisterStack("https", []string{"tcp", "tls", "http"}, 443, "HTTPS request/response probe (TLS + HTTP)")
 }
